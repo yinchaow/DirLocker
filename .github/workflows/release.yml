@@ -1,0 +1,127 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Create or update GitHub Release for current CMake version'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version and verify tag
+        id: meta
+        run: |
+          APP_VERSION=$(sed -n 's/^project(dirlocker VERSION \([^ ]*\).*/\1/p' CMakeLists.txt)
+          if [ -z "${APP_VERSION}" ]; then
+            echo "Failed to parse version from CMakeLists.txt" >&2
+            exit 1
+          fi
+          echo "version=${APP_VERSION}" >> "${GITHUB_OUTPUT}"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            if [ "${TAG_NAME}" != "v${APP_VERSION}" ]; then
+              echo "Tag ${TAG_NAME} does not match CMakeLists.txt version v${APP_VERSION}" >&2
+              exit 1
+            fi
+            echo "tag=${TAG_NAME}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "tag=v${APP_VERSION}" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Build Kylin V10 SP1 & Windows x64 installers
+        run: bash scripts/build_all.sh
+
+      - name: Package release assets and SHA-256 checksums
+        run: |
+          APP_VERSION="${{ steps.meta.outputs.version }}"
+          rm -rf release_assets
+          mkdir -p release_assets
+          cp "dist/windows/DirLocker_Setup_v${APP_VERSION}.exe" release_assets/
+          cp "dist/kylin-ubuntu20.04/dirlocker_${APP_VERSION}_amd64.deb" release_assets/
+          python3 - "${APP_VERSION}" <<'PY'
+          import os, sys, zipfile
+
+          ver = sys.argv[1]
+
+          def pack(src_dir, out_zip):
+              with zipfile.ZipFile(out_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+                  for root, _, files in os.walk(src_dir):
+                      for fname in sorted(files):
+                          full = os.path.join(root, fname)
+                          zf.write(full, os.path.relpath(full, src_dir))
+
+          pack("dist/windows", f"release_assets/dirlocker_v{ver}_windows.zip")
+          pack("dist/kylin-ubuntu20.04", f"release_assets/dirlocker_v{ver}_kylin.zip")
+          PY
+          (cd release_assets && sha256sum \
+            "DirLocker_Setup_v${APP_VERSION}.exe" \
+            "dirlocker_v${APP_VERSION}_windows.zip" \
+            "dirlocker_${APP_VERSION}_amd64.deb" \
+            "dirlocker_v${APP_VERSION}_kylin.zip" > SHA256SUMS.txt)
+          cat release_assets/SHA256SUMS.txt
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dirlocker-v${{ steps.meta.outputs.version }}
+          path: release_assets/*
+
+      - name: Publish GitHub Release
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          APP_VERSION="${{ steps.meta.outputs.version }}"
+          NOTES_FILE="$(mktemp)"
+          {
+            echo "### 构建产物 / Release Assets (v${APP_VERSION})"
+            echo ""
+            echo "- **Windows 10 / 11 (x64)**：\`DirLocker_Setup_v${APP_VERSION}.exe\`（或 \`dirlocker_v${APP_VERSION}_windows.zip\`）"
+            echo "- **银河麒麟 V10 SP1 / Ubuntu 20.04 (x64)**：\`dirlocker_${APP_VERSION}_amd64.deb\`（或含离线脚本的 \`dirlocker_v${APP_VERSION}_kylin.zip\`）"
+            echo ""
+            echo "### SHA-256 校验值"
+            echo '```text'
+            cat release_assets/SHA256SUMS.txt
+            echo '```'
+          } > "${NOTES_FILE}"
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" release_assets/* --clobber
+            gh release edit "${TAG}" --notes-file "${NOTES_FILE}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            gh release create "${TAG}" release_assets/* \
+              --title "DirLocker v${APP_VERSION}" \
+              --notes-file "${NOTES_FILE}"
+          else
+            gh release create "${TAG}" release_assets/* \
+              --target "${GITHUB_SHA}" \
+              --title "DirLocker v${APP_VERSION}" \
+              --notes-file "${NOTES_FILE}"
+          fi
+
