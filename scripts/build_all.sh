@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [ ! -f /.dockerenv ] && command -v docker >/dev/null 2>&1; then
     if ! docker image inspect dirlocker-builder:20.04 >/dev/null 2>&1; then
-        docker build -f "${ROOT_DIR}/Dockerfile.builder" -t dirlocker-builder:20.04 "${ROOT_DIR}"
+        docker build --network=host -f "${ROOT_DIR}/Dockerfile.builder" -t dirlocker-builder:20.04 "${ROOT_DIR}"
     fi
     exec docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp \
         -v "${ROOT_DIR}:/workspace" -w /workspace \

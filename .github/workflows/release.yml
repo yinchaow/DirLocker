@@ -52,6 +52,8 @@ jobs:
           fi
 
       - name: Build Kylin V10 SP1 & Windows x64 installers
+        env:
+          BUILDKIT_PROGRESS: plain
         run: bash scripts/build_all.sh
 
       - name: Package release assets and SHA-256 checksums
