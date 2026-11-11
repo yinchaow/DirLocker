@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=使用 目录密匣 解锁
+GenericName=DirLocker Unlock
+Comment=验证密码后解锁并打开加密目录
+Exec=/usr/bin/dirlocker --unlock %f
+Icon=dirlocker-folder
+MimeType=application/x-dirlocker-vault;
+NoDisplay=true
+Terminal=false
+StartupNotify=true
+

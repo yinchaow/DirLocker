@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=目录密匣
+GenericName=Directory Locker
+Comment=为目录加设访问密码（主密码/独立密码，一键全锁与自动回锁）
+Exec=/usr/bin/dirlocker --show
+Icon=dirlocker
+Terminal=false
+Categories=Utility;Security;
+StartupNotify=true
+

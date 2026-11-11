@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DirLocker Tray
+Comment=DirLocker 后台托盘与自动回锁监控
+Exec=/usr/bin/dirlocker --tray
+Icon=dirlocker
+Terminal=false
+X-GNOME-Autostart-enabled=true
+OnlyShowIn=UKUI;GNOME;XFCE;MATE;KDE;LXQt;
+

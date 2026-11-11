@@ -1,0 +1,7 @@
+build-linux/
+build-win64/
+dist/
+Testing/
+*.tmp
+*.zip
+.DS_Store

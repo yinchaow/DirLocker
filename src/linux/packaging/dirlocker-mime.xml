@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-dirlocker-vault">
+    <comment>DirLocker Encrypted Directory</comment>
+    <comment xml:lang="zh_CN">目录密匣加密目录</comment>
+    <icon name="dirlocker-folder"/>
+    <generic-icon name="dirlocker-folder"/>
+    <glob pattern="*.dlock" weight="60"/>
+    <magic priority="80">
+      <match type="string" value="DLK1" offset="0">
+        <match type="byte" value="0" offset="4"/>
+      </match>
+    </magic>
+  </mime-type>
+</mime-info>
+

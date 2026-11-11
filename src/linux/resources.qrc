@@ -1,0 +1,12 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file alias="dirlocker-16.png">packaging/icons/apps/16x16/dirlocker.png</file>
+        <file alias="dirlocker-32.png">packaging/icons/apps/32x32/dirlocker.png</file>
+        <file alias="dirlocker-48.png">packaging/icons/apps/48x48/dirlocker.png</file>
+        <file alias="dirlocker-64.png">packaging/icons/apps/64x64/dirlocker.png</file>
+        <file alias="dirlocker-256.png">packaging/icons/apps/256x256/dirlocker.png</file>
+        <file alias="dirlocker-folder-32.png">packaging/icons/mimetypes/32x32/dirlocker-folder.png</file>
+        <file alias="dirlocker-folder-64.png">packaging/icons/mimetypes/64x64/dirlocker-folder.png</file>
+    </qresource>
+</RCC>
+
