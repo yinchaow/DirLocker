@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -49,6 +49,64 @@ jobs:
             echo "tag=${TAG_NAME}" >> "${GITHUB_OUTPUT}"
           else
             echo "tag=v${APP_VERSION}" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Configure Docker DNS and IPv4
+        run: |
+          sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+          sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+          python3 - <<'PY'
+          import json, os, re
+
+          path = "/etc/docker/daemon.json"
+          cfg = {}
+          if os.path.exists(path):
+              with open(path, "r") as f:
+                  cfg = json.load(f)
+
+          dns = []
+          for rfile in ("/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"):
+              if os.path.exists(rfile):
+                  with open(rfile, "r") as f:
+                      for line in f:
+                          m = re.match(r"^\s*nameserver\s+(\S+)", line)
+                          if m:
+                              ip = m.group(1)
+                              if not ip.startswith("127.") and ":" not in ip and ip not in dns:
+                                  dns.append(ip)
+          for ip in ("8.8.8.8", "1.1.1.1"):
+              if ip not in dns:
+                  dns.append(ip)
+
+          cfg["dns"] = dns
+          with open("/tmp/daemon.json", "w") as f:
+              json.dump(cfg, f, indent=2)
+          print("Docker daemon.json:", cfg)
+          PY
+          sudo cp /tmp/daemon.json /etc/docker/daemon.json
+          sudo systemctl restart docker
+
+      - name: Prepare builder image
+        env:
+          BUILDKIT_PROGRESS: plain
+        run: |
+          if ! docker build --network=host -f Dockerfile.builder -t dirlocker-builder:20.04 .; then
+            echo "docker build failed; retrying via docker run with explicit DNS..."
+            DNS_ARGS=""
+            for ip in $(python3 -c 'import json; print(" ".join(json.load(open("/etc/docker/daemon.json")).get("dns", ["8.8.8.8"])))'); do
+              DNS_ARGS="${DNS_ARGS} --dns ${ip}"
+            done
+            docker rm -f dirlocker-prep >/dev/null 2>&1 || true
+            docker run --name dirlocker-prep ${DNS_ARGS} \
+              -e DEBIAN_FRONTEND=noninteractive \
+              ubuntu:20.04 \
+              bash -c 'apt-get -o Acquire::ForceIPv4=true update && apt-get -o Acquire::ForceIPv4=true install -y --no-install-recommends build-essential cmake pkg-config qtbase5-dev libqt5x11extras5-dev libx11-dev libxss-dev libpeony-dev mingw-w64 nsis dpkg-dev fakeroot ca-certificates && rm -rf /var/lib/apt/lists/*'
+            docker commit \
+              --change 'ENV DEBIAN_FRONTEND=noninteractive' \
+              --change 'WORKDIR /workspace' \
+              --change 'CMD ["/bin/bash"]' \
+              dirlocker-prep dirlocker-builder:20.04
+            docker rm -f dirlocker-prep
           fi
 
       - name: Build Kylin V10 SP1 & Windows x64 installers
