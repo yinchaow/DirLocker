@@ -92,8 +92,7 @@ int main(int argc, char* argv[]) {
 
     dirlocker::MainWindow win;
     if (!trayOnly && action == "show") {
-        win.show();
-        win.ensureMasterPasswordInitialized();
+        win.showMainWindow();
     }
 
     QObject::connect(&ipcServer, &QLocalServer::newConnection, [&]() {

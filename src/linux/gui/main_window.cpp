@@ -2,8 +2,10 @@
 
 #include "daemon_client.hpp"
 #include "password_dialog.hpp"
+#include "../../core/security_util.hpp"
 #include "../../core/version.hpp"
 
+#include <algorithm>
 #include <QApplication>
 #include <QClipboard>
 #include <QCursor>
@@ -599,8 +601,8 @@ void MainWindow::setupUi() {
 
     auto* addBtn = new QPushButton(QStringLiteral("＋ 添加并锁定"), this);
     addBtn->setObjectName(QStringLiteral("primaryBtn"));
-    auto* lockAllBtn = new QPushButton(QStringLiteral("一键全锁 (Ctrl+Alt+L)"), this);
-    lockAllBtn->setObjectName(QStringLiteral("tonalAccentBtn"));
+    lock_all_btn_ = new QPushButton(QStringLiteral("一键全锁 (Ctrl+Alt+L)"), this);
+    lock_all_btn_->setObjectName(QStringLiteral("tonalAccentBtn"));
     search_edit_ = new QLineEdit(this);
     search_edit_->setObjectName(QStringLiteral("searchBox"));
     search_edit_->setPlaceholderText(QStringLiteral("搜索目录名称或路径..."));
@@ -610,7 +612,9 @@ void MainWindow::setupUi() {
 
     auto* settingsBtn = new QPushButton(QStringLiteral("设置"), this);
     auto* settingsMenu = new QMenu(settingsBtn);
-    auto* secSetAct = settingsMenu->addAction(QStringLiteral("安全与自动回锁设置..."));
+    auto* secSetAct = settingsMenu->addAction(QStringLiteral("安全设置与快捷键..."));
+    auto* healthAct = settingsMenu->addAction(QStringLiteral("保护区体检与一键修复..."));
+    settingsMenu->addSeparator();
     auto* masterAct = settingsMenu->addAction(QStringLiteral("修改主密码..."));
     settingsBtn->setMenu(settingsMenu);
 
@@ -622,7 +626,7 @@ void MainWindow::setupUi() {
     helpBtn->setMenu(helpMenu);
 
     topBar->addWidget(addBtn);
-    topBar->addWidget(lockAllBtn);
+    topBar->addWidget(lock_all_btn_);
     topBar->addWidget(search_edit_);
     topBar->addStretch();
     topBar->addWidget(settingsBtn);
@@ -685,9 +689,10 @@ void MainWindow::setupUi() {
     setCentralWidget(central);
 
     connect(addBtn, &QPushButton::clicked, this, &MainWindow::onAddAndLock);
-    connect(lockAllBtn, &QPushButton::clicked, this, &MainWindow::onLockAll);
+    connect(lock_all_btn_, &QPushButton::clicked, this, &MainWindow::onLockAll);
     connect(search_edit_, &QLineEdit::textChanged, this, [this]() { rebuildTableView(); });
     connect(secSetAct, &QAction::triggered, this, &MainWindow::onOpenSettings);
+    connect(healthAct, &QAction::triggered, this, &MainWindow::onHealthCheck);
     connect(masterAct, &QAction::triggered, this, &MainWindow::onChangeMasterPassword);
     connect(recAct, &QAction::triggered, this, &MainWindow::onShowRecoveryGuide);
     connect(aboutAct, &QAction::triggered, this, &MainWindow::onShowAbout);
@@ -703,40 +708,108 @@ void MainWindow::setupTray() {
 
     auto* menu = new QMenu(this);
     auto* openAct = menu->addAction(QStringLiteral("打开主界面"));
-    auto* lockAllAct = menu->addAction(QStringLiteral("一键全部锁定 (Ctrl+Alt+L)"));
+    tray_lock_all_act_ = menu->addAction(QStringLiteral("一键全部锁定 (Ctrl+Alt+L)"));
     menu->addSeparator();
-    auto* settingsAct = menu->addAction(QStringLiteral("安全设置"));
-    auto* masterAct = menu->addAction(QStringLiteral("修改主密码"));
+    auto* settingsAct = menu->addAction(QStringLiteral("安全设置与快捷键..."));
+    auto* healthAct = menu->addAction(QStringLiteral("保护区体检与修复..."));
+    auto* masterAct = menu->addAction(QStringLiteral("修改主密码..."));
     auto* aboutAct = menu->addAction(QStringLiteral("关于 目录密匣"));
     menu->addSeparator();
     auto* quitAct = menu->addAction(QStringLiteral("退出 目录密匣"));
 
     connect(openAct, &QAction::triggered, this, &MainWindow::showMainWindow);
-    connect(lockAllAct, &QAction::triggered, this, &MainWindow::onLockAll);
+    connect(tray_lock_all_act_, &QAction::triggered, this, &MainWindow::onLockAll);
     connect(settingsAct, &QAction::triggered, this, &MainWindow::onOpenSettings);
+    connect(healthAct, &QAction::triggered, this, &MainWindow::onHealthCheck);
     connect(masterAct, &QAction::triggered, this, &MainWindow::onChangeMasterPassword);
     connect(aboutAct, &QAction::triggered, this, &MainWindow::onShowAbout);
     connect(quitAct, &QAction::triggered, this, &MainWindow::onQuitRequested);
     connect(tray_, &QSystemTrayIcon::activated, this, &MainWindow::onTrayActivated);
+    connect(tray_, &QSystemTrayIcon::messageClicked, this, &MainWindow::showMainWindow);
 
     tray_->setContextMenu(menu);
     tray_->show();
 }
 
+void MainWindow::hideAndLockMainWindow() {
+    if (require_master_on_open_) {
+        main_window_unlocked_ = false;
+    }
+    hide();
+}
+
+void MainWindow::updateHotkeyDisplay() {
+    if (lock_all_btn_) {
+        lock_all_btn_->setText(QStringLiteral("一键全锁 (%1)").arg(hotkey_));
+    }
+    if (tray_lock_all_act_) {
+        tray_lock_all_act_->setText(QStringLiteral("一键全部锁定 (%1)").arg(hotkey_));
+    }
+}
+
 void MainWindow::showMainWindow() {
+    refreshState();
+    if (has_master_password_ && require_master_on_open_ && !main_window_unlocked_) {
+        if (main_auth_prompt_open_) return;
+        main_auth_prompt_open_ = true;
+        QWidget* dlgParent = isVisible() ? this : nullptr;
+        while (true) {
+            VerifyMasterDialog dlg(
+                QStringLiteral("打开主窗口 - 验证主密码"),
+                QStringLiteral("已开启“打开主窗口验证主密码”，请输入主密码以解锁界面："),
+                dlgParent);
+            if (dlg.exec() != QDialog::Accepted) {
+                main_auth_prompt_open_ = false;
+                return;
+            }
+            JsonValue params = JsonValue::object();
+            params.set("password", dlg.password().toStdString());
+            auto reply = DaemonClient::send("verify_master", std::move(params));
+            if (!reply.transport_ok) {
+                showMessageZh(dlgParent, QMessageBox::Critical, QStringLiteral("错误"),
+                              QString::fromStdString(reply.message));
+                main_auth_prompt_open_ = false;
+                return;
+            }
+            if (reply.ok) {
+                main_window_unlocked_ = true;
+                break;
+            }
+            const int cd = static_cast<int>(reply.data.get("cooldown_seconds").as_int(0));
+            showMessageZh(dlgParent, QMessageBox::Warning,
+                          cd > 0 ? QStringLiteral("请稍后再试") : QStringLiteral("密码错误"),
+                          QString::fromStdString(reply.message));
+            if (cd > 0) {
+                main_auth_prompt_open_ = false;
+                return;
+            }
+        }
+        main_auth_prompt_open_ = false;
+    }
+
     showNormal();
     raise();
     activateWindow();
     refreshState();
+    ensureMasterPasswordInitialized();
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (!really_quit_ && tray_ && tray_->isVisible()) {
-        hide();
+        hideAndLockMainWindow();
         event->ignore();
         return;
     }
     event->accept();
+}
+
+void MainWindow::changeEvent(QEvent* event) {
+    QMainWindow::changeEvent(event);
+    if (event && event->type() == QEvent::WindowStateChange) {
+        if (isMinimized() && require_master_on_open_ && tray_ && tray_->isVisible()) {
+            QTimer::singleShot(0, this, &MainWindow::hideAndLockMainWindow);
+        }
+    }
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
@@ -798,8 +871,11 @@ void MainWindow::dropEvent(QDropEvent* event) {
 
 void MainWindow::onTrayActivated(QSystemTrayIcon::ActivationReason reason) {
     if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick) {
-        if (isVisible()) hide();
-        else showMainWindow();
+        if (isVisible()) {
+            hideAndLockMainWindow();
+        } else {
+            showMainWindow();
+        }
     }
 }
 
@@ -818,12 +894,24 @@ void MainWindow::refreshState() {
     const auto& st = reply.data.get("settings");
     if (st.is_object()) {
         auto_relock_minutes_ = static_cast<int>(st.get("auto_relock_minutes").as_int(5));
-        relock_on_screen_lock_ = st.get("relock_on_screen_lock").as_bool(true);
-        hotkey_ = QString::fromStdString(st.get("hotkey").as_string_or("Ctrl+Alt+L"));
+        require_master_on_open_ = st.get("require_master_on_open").as_bool(false);
+        const std::string rawHk = st.get("hotkey").as_string_or("Ctrl+Alt+L");
+        HotkeySpec hkSpec;
+        std::string normHk;
+        if (HotkeySpec::parse(rawHk, hkSpec, &normHk)) {
+            hotkey_ = QString::fromStdString(normHk);
+        } else {
+            hotkey_ = QStringLiteral("Ctrl+Alt+L");
+        }
+    }
+    if (!require_master_on_open_) {
+        main_window_unlocked_ = true;
     }
     if (monitor_) {
-        monitor_->updatePolicy(auto_relock_minutes_, relock_on_screen_lock_);
+        monitor_->updatePolicy(auto_relock_minutes_);
+        monitor_->setHotkey(hotkey_);
     }
+    updateHotkeyDisplay();
 
     rows_.clear();
     const auto& arr = reply.data.get("entries");
@@ -916,11 +1004,14 @@ void MainWindow::rebuildTableView() {
         bool hkOk = monitor_ && monitor_->hotkeyRegistered();
         QString hkText = hkOk
             ? QStringLiteral("热键 %1 已就绪").arg(hotkey_)
-            : QStringLiteral("托盘保护运行中");
+            : QStringLiteral("热键 %1 未注册").arg(hotkey_);
         QString idleText = auto_relock_minutes_ > 0
             ? QStringLiteral("闲置 %1 分钟自动回锁").arg(auto_relock_minutes_)
             : QStringLiteral("闲置回锁已关闭");
-        policy_label_->setText(hkText + QStringLiteral("  |  ") + idleText);
+        QString gateText = require_master_on_open_
+            ? QStringLiteral("开窗需验密")
+            : QStringLiteral("严格防占用开启");
+        policy_label_->setText(hkText + QStringLiteral("  |  ") + idleText + QStringLiteral("  |  ") + gateText);
     }
 
     if (tray_) {
@@ -1077,8 +1168,11 @@ bool MainWindow::unlockPathFlow(const QString& path, bool useCustomPassword) {
             }
             return true;
         }
-        showMessageZh(dlgParent, QMessageBox::Warning, QStringLiteral("密码错误"),
+        const int cd = static_cast<int>(reply.data.get("cooldown_seconds").as_int(0));
+        showMessageZh(dlgParent, QMessageBox::Warning,
+                      cd > 0 ? QStringLiteral("请稍后再试") : QStringLiteral("密码错误"),
                       QString::fromStdString(reply.message));
+        if (cd > 0) return false;
     }
 }
 
@@ -1254,8 +1348,34 @@ void MainWindow::lockAllInternal(const QString& reason, bool showNotifyWhenZero)
     auto reply = DaemonClient::send("lock_all");
     if (!reply.transport_ok) return;
     int cnt = static_cast<int>(reply.data.get("locked_count").as_int(0));
+    int skipped = static_cast<int>(reply.data.get("skipped_count").as_int(0));
     refreshState();
-    if (tray_ && (cnt > 0 || showNotifyWhenZero)) {
+    if (!tray_) return;
+
+    if (skipped > 0) {
+        QStringList items;
+        const auto& skArr = reply.data.get("skipped_items");
+        if (skArr.is_array()) {
+            const size_t lim = std::min<size_t>(skArr.as_array().size(), 3);
+            for (size_t i = 0; i < lim; ++i) {
+                items.push_back(QString::fromStdString(skArr.as_array()[i].as_string()));
+            }
+        }
+        QString preview = items.join(QStringLiteral("、"));
+        if (skipped > 3) preview += QStringLiteral(" 等");
+        QString msg;
+        if (cnt > 0) {
+            msg = QStringLiteral("%1：已锁定 %2 个目录，另有 %3 个因正在使用被跳过（%4）。点击打开主界面查看。")
+                      .arg(reason).arg(cnt).arg(skipped).arg(preview);
+        } else {
+            msg = QStringLiteral("%1：有 %2 个目录因正在使用跳过锁定（%3），请先关闭占用程序后再试。")
+                      .arg(reason).arg(skipped).arg(preview);
+        }
+        tray_->showMessage(QStringLiteral("目录密匣"), msg, QSystemTrayIcon::Warning, 4500);
+        return;
+    }
+
+    if (cnt > 0 || showNotifyWhenZero) {
         tray_->showMessage(QStringLiteral("目录密匣"),
                            QStringLiteral("%1：共锁定 %2 个目录").arg(reason).arg(cnt),
                            QSystemTrayIcon::Information, 2500);
@@ -1381,26 +1501,76 @@ void MainWindow::onChangeMasterPassword() {
 }
 
 void MainWindow::onOpenSettings() {
+    refreshState();
     if (!ensureMasterPasswordInitialized()) return;
-    bool hkOk = monitor_ && monitor_->hotkeyRegistered();
-    SettingsDialog dlg(auto_relock_minutes_, relock_on_screen_lock_, hotkey_, hkOk, this);
-    if (dlg.exec() != QDialog::Accepted) return;
+    QWidget* dlgParent = isVisible() ? this : nullptr;
+    if (monitor_) {
+        monitor_->setHotkeyPaused(true);
+    }
+    auto probe = [this](const QString& cand, QString& err) -> bool {
+        if (!monitor_) return true;
+        return monitor_->testHotkeyAvailable(cand, &err);
+    };
+    SettingsDialog dlg(auto_relock_minutes_, require_master_on_open_, hotkey_, probe, dlgParent);
+    const int res = dlg.exec();
+    if (monitor_) {
+        monitor_->setHotkeyPaused(false);
+    }
+    if (res != QDialog::Accepted) return;
 
     JsonValue params = JsonValue::object();
     params.set("password", dlg.masterPassword().toStdString());
     params.set("auto_relock_minutes", dlg.autoRelockMinutes());
-    params.set("relock_on_screen_lock", dlg.relockOnScreenLock());
-    params.set("hotkey", hotkey_.toStdString());
+    params.set("require_master_on_open", dlg.requireMasterOnOpen());
+    params.set("hotkey", dlg.hotkey().toStdString());
 
     auto reply = DaemonClient::send("update_settings", std::move(params));
     if (!reply.transport_ok || !reply.ok) {
-        showMessageZh(this, QMessageBox::Warning, QStringLiteral("保存失败"),
+        showMessageZh(dlgParent, QMessageBox::Warning, QStringLiteral("保存失败"),
                       QString::fromStdString(reply.message));
         return;
     }
     refreshState();
-    showMessageZh(this, QMessageBox::Information, QStringLiteral("成功"),
+    showMessageZh(dlgParent, QMessageBox::Information, QStringLiteral("成功"),
                   QStringLiteral("安全设置已保存。"));
+}
+
+void MainWindow::onHealthCheck() {
+    refreshState();
+    if (!ensureMasterPasswordInitialized()) return;
+    QWidget* dlgParent = isVisible() ? this : nullptr;
+    QString verifiedPass;
+    while (true) {
+        VerifyMasterDialog verifyDlg(
+            QStringLiteral("保护区体检与一键修复"),
+            QStringLiteral("体检将核查各受保护目录与隐藏保护区状态，请先验证主密码："),
+            dlgParent);
+        if (verifyDlg.exec() != QDialog::Accepted) return;
+
+        JsonValue params = JsonValue::object();
+        params.set("password", verifyDlg.password().toStdString());
+        auto reply = DaemonClient::send("verify_master", std::move(params));
+        if (!reply.transport_ok) {
+            showMessageZh(dlgParent, QMessageBox::Critical, QStringLiteral("错误"),
+                          QString::fromStdString(reply.message));
+            return;
+        }
+        if (reply.ok) {
+            verifiedPass = verifyDlg.password();
+            break;
+        }
+        const int cd = static_cast<int>(reply.data.get("cooldown_seconds").as_int(0));
+        showMessageZh(dlgParent, QMessageBox::Warning,
+                      cd > 0 ? QStringLiteral("请稍后再试") : QStringLiteral("验证失败"),
+                      QString::fromStdString(reply.message));
+        if (cd > 0) return;
+    }
+
+    HealthCheckDialog dlg(verifiedPass, dlgParent);
+    dlg.exec();
+    if (dlg.changed()) {
+        refreshState();
+    }
 }
 
 void MainWindow::onShowRecoveryGuide() {
@@ -1574,9 +1744,10 @@ void MainWindow::onShowAbout() {
             "<span style=\"color:#0d47a1;\">•</span> <b>双重密码体系</b>：支持统一主密码与单目录独立密码，随时自由切换与改密<br/>"
             "<span style=\"color:#0d47a1;\">•</span> <b>快捷验证解锁</b>：已加密目录独立标识，双击即可输入密码解锁进入<br/>"
             "<span style=\"color:#0d47a1;\">•</span> <b>批量拖拽加锁</b>：支持将单个或多个目录直接拖入窗口批量锁定<br/>"
-            "<span style=\"color:#0d47a1;\">•</span> <b>全锁与自动回锁</b>：支持 <span style=\"font-family:monospace; background-color:#e2e8f0; color:#0c4a6e;\">&nbsp;Ctrl+Alt+L&nbsp;</span> 一键全锁，及闲置、锁屏自动锁定<br/>"
-            "<span style=\"color:#0d47a1;\">•</span> <b>零文件内容改动</b>：绝不加密或修改目录内原始文件，安全锁定与无损还原"
-            "</div>"),
+            "<span style=\"color:#0d47a1;\">•</span> <b>全锁与防占用</b>：支持 <span style=\"font-family:monospace; background-color:#e2e8f0; color:#0c4a6e;\">&nbsp;%1&nbsp;</span> 一键全锁与闲置自动回锁，程序占用目录时自动跳过并提示<br/>"
+            "<span style=\"color:#0d47a1;\">•</span> <b>主界保护与防爆破</b>：可选打开主窗口验证主密码，连续输错密码触发退避冷却时间<br/>"
+            "<span style=\"color:#0d47a1;\">•</span> <b>无损与体检修复</b>：零文件内容改动，内置保护区健康体检与安全无损一键修复"
+            "</div>").arg(hotkey_.toHtmlEscaped()),
         featCard);
     featBody->setTextFormat(Qt::RichText);
     featBody->setWordWrap(true);

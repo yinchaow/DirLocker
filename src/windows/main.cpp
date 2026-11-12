@@ -1,6 +1,7 @@
 #include "../core/crypto.hpp"
 #include "../core/json_mini.hpp"
 #include "../core/path_guard.hpp"
+#include "../core/security_util.hpp"
 #include "../core/state_store.hpp"
 #include "../core/version.hpp"
 #include "acl_locker.hpp"
@@ -17,7 +18,6 @@
 #include <objbase.h>
 #include <gdiplus.h>
 #include <shellapi.h>
-#include <wtsapi32.h>
 
 #include <atomic>
 #include <cstring>
@@ -34,6 +34,7 @@ constexpr UINT WM_APP_TRAY = WM_APP + 1;
 constexpr UINT WM_APP_IPC = WM_APP + 2;
 constexpr UINT_PTR kIdleTimerId = 1;
 constexpr int kHotkeyId = 1;
+constexpr int kProbeHotkeyId = 2;
 
 enum ControlId {
     IDC_BTN_ADD = 101,
@@ -48,6 +49,7 @@ enum ControlId {
     IDC_BTN_REMOVE,
     IDC_BTN_RECOVERY,
     IDC_BTN_ABOUT,
+    IDC_BTN_HEALTH,
     IDC_LIST_DIRS,
     IDC_STATUS_LABEL,
     IDC_POLICY_LABEL,
@@ -55,6 +57,7 @@ enum ControlId {
     IDM_TRAY_LOCK_ALL,
     IDM_TRAY_SETTINGS,
     IDM_TRAY_MASTER_PW,
+    IDM_TRAY_HEALTH,
     IDM_TRAY_ABOUT,
     IDM_TRAY_EXIT,
     IDM_ROW_UNLOCK_OR_OPEN = 301,
@@ -109,7 +112,12 @@ struct WinApp {
 
     bool tray_added = false;
     bool hotkey_ok = false;
+    std::string registered_hotkey = "Ctrl+Alt+L";
     bool idle_triggered = false;
+    int upgrade_tick_counter = 0;
+    bool main_window_unlocked = false;
+    bool main_auth_prompt_open = false;
+    AuthThrottle auth_throttle;
     bool really_quit = false;
 
     std::wstring pipe_name;
@@ -190,14 +198,15 @@ void remove_tray(WinApp& app) {
     app.tray_added = false;
 }
 
-void show_tray_balloon(WinApp& app, const std::wstring& title, const std::wstring& body) {
+void show_tray_balloon(WinApp& app, const std::wstring& title, const std::wstring& body,
+                       DWORD info_flags = NIIF_INFO) {
     if (!app.tray_added) return;
     NOTIFYICONDATAW nid{};
     nid.cbSize = sizeof(nid);
     nid.hWnd = app.hwnd;
     nid.uID = 1;
     nid.uFlags = NIF_INFO;
-    nid.dwInfoFlags = NIIF_INFO;
+    nid.dwInfoFlags = info_flags;
     wcsncpy(nid.szInfoTitle, title.c_str(), 63);
     wcsncpy(nid.szInfo, body.c_str(), 255);
     Shell_NotifyIconW(NIM_MODIFY, &nid);
@@ -301,7 +310,12 @@ void rebuild_list_view(WinApp& app) {
 
     if (app.policy_label) {
         int mins = app.store->settings().auto_relock_minutes;
-        std::wstring hk = app.hotkey_ok ? L"热键 Ctrl+Alt+L 已就绪" : L"托盘保护运行中";
+        std::wstring whk = utf8_to_wide(
+            HotkeySpec::normalize(app.registered_hotkey.empty() ? app.store->settings().hotkey
+                                                                : app.registered_hotkey,
+                                  "Ctrl+Alt+L"));
+        std::wstring hk = app.hotkey_ok ? (L"热键 " + whk + L" 已就绪")
+                                        : (L"托盘保护运行中（" + whk + L" 未注册）");
         std::wstring idle = mins > 0
             ? (L"闲置 " + std::to_wstring(mins) + L" 分钟自动回锁")
             : L"闲置回锁已关闭";
@@ -312,11 +326,41 @@ void rebuild_list_view(WinApp& app) {
     add_or_update_tray(app, true);
 }
 
+void layout_main_window(WinApp& app, int width, int height);
+
+void apply_windows_hotkey(WinApp& app, const std::string& raw_hotkey) {
+    if (app.hotkey_ok) {
+        UnregisterHotKey(app.hwnd, kHotkeyId);
+        app.hotkey_ok = false;
+    }
+    std::string hk = HotkeySpec::normalize(raw_hotkey, "Ctrl+Alt+L");
+    app.registered_hotkey = hk;
+    UINT mods = 0, vk = 0;
+    if (win_hotkey_to_native(hk, mods, vk)) {
+        app.hotkey_ok = RegisterHotKey(app.hwnd, kHotkeyId, mods, vk) != 0;
+    }
+    HWND lock_btn = GetDlgItem(app.hwnd, IDC_BTN_LOCK_ALL);
+    if (lock_btn) {
+        SetWindowTextW(lock_btn, utf8_to_wide("一键全锁 (" + hk + ")").c_str());
+        RECT rc{};
+        GetClientRect(app.hwnd, &rc);
+        if (rc.right > rc.left && rc.bottom > rc.top) {
+            layout_main_window(app, rc.right - rc.left, rc.bottom - rc.top);
+        }
+    }
+}
+
 void refresh_ui(WinApp& app) {
     std::string err;
     app.store->load(&err);
-    for (const auto& e : app.store->entries()) {
-        win_repair_locked_entry_stub(e);
+    bool repaired = false;
+    for (auto& e : app.store->entries_mut()) {
+        if (win_repair_locked_entry_stub(e)) {
+            repaired = true;
+        }
+    }
+    if (repaired) {
+        app.store->save(nullptr);
     }
     rebuild_list_view(app);
 }
@@ -326,7 +370,76 @@ void show_modal_msg(HWND owner, const std::wstring& text, const std::wstring& ti
     MessageBoxW(owner, text.c_str(), title.c_str(), flags);
 }
 
+bool check_throttle_before_prompt(WinApp& app, HWND owner) {
+    int64_t rem = app.auth_throttle.remaining_cooldown_seconds();
+    if (rem > 0) {
+        show_modal_msg(owner, utf8_to_wide(AuthThrottle::format_cooldown_error(static_cast<int>(rem))),
+                       L"请稍后再试", MB_ICONWARNING);
+        return false;
+    }
+    return true;
+}
+
+bool check_password_with_throttle(WinApp& app, HWND owner, const DirEntry* entry,
+                                  const std::string& pw, const std::wstring& wrong_msg) {
+    if (!check_throttle_before_prompt(app, owner)) {
+        return false;
+    }
+    bool match = entry ? app.store->verify_entry_password(*entry, pw)
+                       : app.store->verify_master_password(pw);
+    if (match) {
+        app.auth_throttle.record_success();
+        return true;
+    }
+    app.auth_throttle.record_failure();
+    int64_t rem_now = app.auth_throttle.remaining_cooldown_seconds();
+    std::wstring msg = wrong_msg;
+    if (rem_now > 0) {
+        msg += L"\n\n" + utf8_to_wide(AuthThrottle::format_cooldown_error(static_cast<int>(rem_now)));
+    }
+    show_modal_msg(owner, msg, L"验证失败", MB_ICONWARNING);
+    return false;
+}
+
+void hide_main_window(WinApp& app) {
+    app.main_window_unlocked = false;
+    ShowWindow(app.hwnd, SW_HIDE);
+}
+
 void show_main_window(WinApp& app) {
+    app.store->load(nullptr);
+    if (app.store->settings().require_master_on_open &&
+        app.store->has_master_password() &&
+        !app.main_window_unlocked) {
+        if (app.main_auth_prompt_open) {
+            if (HWND m = win_get_active_modal_dialog()) {
+                win_bring_window_to_front(m, true);
+            }
+            return;
+        }
+        if (!check_throttle_before_prompt(app, nullptr)) {
+            return;
+        }
+        app.main_auth_prompt_open = true;
+        while (true) {
+            std::string pw;
+            if (!win_show_verify_master_dialog(
+                    nullptr, L"解锁目录密匣主窗口",
+                    L"已开启主窗口访问保护，请输入主密码以打开界面：", pw)) {
+                app.main_auth_prompt_open = false;
+                return;
+            }
+            if (check_password_with_throttle(app, nullptr, nullptr, pw, L"主密码错误，请重试。")) {
+                app.main_window_unlocked = true;
+                break;
+            }
+            if (app.auth_throttle.remaining_cooldown_seconds() > 0) {
+                app.main_auth_prompt_open = false;
+                return;
+            }
+        }
+        app.main_auth_prompt_open = false;
+    }
     win_bring_window_to_front(app.hwnd, false);
     refresh_ui(app);
 }
@@ -354,10 +467,10 @@ void open_in_explorer(const std::string& path) {
     ShellExecuteW(nullptr, L"open", wp.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
-bool lock_existing_entry(WinApp& app, DirEntry& entry, bool allow_fallback = false,
-                         std::string* err_out = nullptr) {
+bool lock_existing_entry(WinApp& app, DirEntry& entry, std::string* err_out = nullptr) {
     if (entry.locked) return true;
     std::string err;
+    bool allow_fallback = app.store->settings().allow_in_place_fallback;
     if (!win_smart_lock(entry, app.self_exe, app.state_dir, allow_fallback, &err)) {
         if (err_out) *err_out = err;
         return false;
@@ -388,7 +501,7 @@ bool lock_new_paths_batch(WinApp& app, HWND owner, const std::vector<std::string
         if (DirEntry* ex = app.store->find_by_path(canonical)) {
             if (ex->locked) {
                 errors.push_back(canonical + " (已处于锁定状态)");
-            } else if (lock_existing_entry(app, *ex, false, &cerr)) {
+            } else if (lock_existing_entry(app, *ex, &cerr)) {
                 ++relocked;
             } else {
                 errors.push_back(canonical + " (" + cerr + ")");
@@ -444,7 +557,8 @@ bool lock_new_paths_batch(WinApp& app, HWND owner, const std::vector<std::string
             entry.custom_hash = custom_hash;
             entry.created_at = StateStore::now_epoch();
             std::string err;
-            if (!win_smart_lock(entry, app.self_exe, app.state_dir, false, &err)) {
+            bool allow_fb = app.store->settings().allow_in_place_fallback;
+            if (!win_smart_lock(entry, app.self_exe, app.state_dir, allow_fb, &err)) {
                 errors.push_back(cp + " (" + err + ")");
                 continue;
             }
@@ -487,6 +601,9 @@ bool lock_new_path_flow(WinApp& app, HWND owner, const std::string& raw_path) {
 }
 
 bool unlock_path_flow(WinApp& app, HWND owner, DirEntry& entry, bool from_explorer = false) {
+    if (!check_throttle_before_prompt(app, owner)) {
+        return false;
+    }
     std::wstring title = L"目录已加密码";
     std::wstring subtitle = from_explorer
         ? L"该目录已加密码保护，请输入密码解锁（取消则拒绝进入）："
@@ -498,8 +615,10 @@ bool unlock_path_flow(WinApp& app, HWND owner, DirEntry& entry, bool from_explor
                                         true, title, subtitle, pw, open_after)) {
             return false;
         }
-        if (!app.store->verify_entry_password(entry, pw)) {
-            show_modal_msg(owner, L"密码错误，请重试。", L"验证失败", MB_ICONWARNING);
+        if (!check_password_with_throttle(app, owner, &entry, pw, L"密码错误，请重试。")) {
+            if (app.auth_throttle.remaining_cooldown_seconds() > 0) {
+                return false;
+            }
             continue;
         }
         std::string err;
@@ -519,21 +638,48 @@ bool unlock_path_flow(WinApp& app, HWND owner, DirEntry& entry, bool from_explor
 }
 
 void lock_all_dirs(WinApp& app, const std::wstring& reason, bool notify_zero) {
-    int count = 0;
+    bool allow_fallback = app.store->settings().allow_in_place_fallback;
+    int vault_count = 0;
+    int inplace_count = 0;
+    std::vector<std::wstring> busy_skipped;
+
     for (auto& e : app.store->entries_mut()) {
         if (e.locked) continue;
         std::string err;
-        if (win_smart_lock(e, app.self_exe, app.state_dir, true, &err)) {
-            ++count;
+        if (win_smart_lock(e, app.self_exe, app.state_dir, allow_fallback, &err)) {
+            if (e.in_place_acl) ++inplace_count;
+            else ++vault_count;
+        } else {
+            std::vector<std::string> procs = win_detect_blocking_processes(e.path);
+            std::string item = basename_utf8(e.path);
+            if (!procs.empty()) {
+                item += " (" + procs[0] + (procs.size() > 1 ? " 等" : "") + ")";
+            }
+            busy_skipped.push_back(utf8_to_wide(item));
         }
     }
-    if (count > 0) {
+    int total_locked = vault_count + inplace_count;
+    if (total_locked > 0) {
         app.store->save(nullptr);
     }
     refresh_ui(app);
-    if (count > 0 || notify_zero) {
-        show_tray_balloon(app, L"目录密匣",
-                          reason + L"：共锁定 " + std::to_wstring(count) + L" 个目录");
+
+    if (total_locked > 0 || !busy_skipped.empty() || notify_zero) {
+        std::wstring msg = reason + L"：共锁定 " + std::to_wstring(total_locked) + L" 个目录";
+        if (inplace_count > 0) {
+            msg += L"\n其中 " + std::to_wstring(inplace_count) +
+                   L" 个使用原位权限锁（可双击旁侧“点此解锁”入口，关闭占用后将自动迁入保护区）";
+        }
+        if (!busy_skipped.empty()) {
+            msg += L"\n因占用未锁定 " + std::to_wstring(busy_skipped.size()) + L" 个：";
+            for (size_t i = 0; i < busy_skipped.size() && i < 2; ++i) {
+                if (i > 0) msg += L"、";
+                msg += busy_skipped[i];
+            }
+            if (busy_skipped.size() > 2) msg += L" 等";
+            msg += L"（点击通知查看详情）";
+        }
+        show_tray_balloon(app, L"目录密匣", msg, busy_skipped.empty() ? NIIF_INFO : NIIF_WARNING);
     }
 }
 
@@ -569,6 +715,14 @@ void handle_command(WinApp& app, const std::string& action, const std::string& r
             if (!file_id.empty()) entry = app.store->find_by_id(file_id);
             if (!entry && !orig_path.empty()) {
                 entry = app.store->find_by_path(normalize_path_lexical(orig_path));
+            }
+        }
+        if (!entry) {
+            for (auto& e : app.store->entries_mut()) {
+                if (!e.stub_path.empty() && paths_equal(e.stub_path, raw_path)) {
+                    entry = &e;
+                    break;
+                }
             }
         }
         if (!entry) {
@@ -639,12 +793,15 @@ void handle_command(WinApp& app, const std::string& action, const std::string& r
                 return;
             }
             std::string lerr;
-            if (!lock_existing_entry(app, *existing, false, &lerr)) {
+            if (!lock_existing_entry(app, *existing, &lerr)) {
                 show_modal_msg(ext_parent, utf8_to_wide(lerr), L"锁定失败", MB_ICONERROR);
                 return;
             }
             refresh_ui(app);
-            show_tray_balloon(app, L"目录密匣", L"已重新锁定：\n" + utf8_to_wide(canonical));
+            show_tray_balloon(app, L"目录密匣",
+                              existing->in_place_acl
+                                  ? (L"已启用原位权限保护（可在旁侧点“点此解锁”）：\n" + utf8_to_wide(canonical))
+                                  : (L"已重新锁定：\n" + utf8_to_wide(canonical)));
             return;
         }
         lock_new_path_flow(app, ext_parent, canonical);
@@ -657,12 +814,15 @@ void handle_command(WinApp& app, const std::string& action, const std::string& r
             unlock_path_flow(app, ext_parent, *existing, true);
         } else {
             std::string lerr;
-            if (!lock_existing_entry(app, *existing, false, &lerr)) {
+            if (!lock_existing_entry(app, *existing, &lerr)) {
                 show_modal_msg(ext_parent, utf8_to_wide(lerr), L"锁定失败", MB_ICONERROR);
                 return;
             }
             refresh_ui(app);
-            show_tray_balloon(app, L"目录密匣", L"已锁定目录：\n" + utf8_to_wide(canonical));
+            show_tray_balloon(app, L"目录密匣",
+                              existing->in_place_acl
+                                  ? (L"已启用原位权限保护（可在旁侧点“点此解锁”）：\n" + utf8_to_wide(canonical))
+                                  : (L"已锁定目录：\n" + utf8_to_wide(canonical)));
         }
     } else {
         lock_new_path_flow(app, ext_parent, canonical);
@@ -710,7 +870,7 @@ void do_lock_selected(WinApp& app) {
         return;
     }
     std::string err;
-    if (!lock_existing_entry(app, entry, false, &err)) {
+    if (!lock_existing_entry(app, entry, &err)) {
         MessageBoxW(app.hwnd, utf8_to_wide(err).c_str(), L"锁定失败", MB_ICONERROR);
         return;
     }
@@ -746,14 +906,14 @@ void do_change_dir_password(WinApp& app) {
         MessageBoxW(app.hwnd, L"请先在列表中选择一个目录。", L"提示", MB_ICONINFORMATION);
         return;
     }
+    if (!check_throttle_before_prompt(app, app.hwnd)) return;
     DirEntry& entry = app.store->entries_mut()[static_cast<size_t>(row)];
     std::string cur_pw, new_pw;
     if (!win_show_change_dir_pw_dialog(app.hwnd, entry.path, entry.use_custom_password,
                                        cur_pw, new_pw)) {
         return;
     }
-    if (!app.store->verify_entry_password(entry, cur_pw)) {
-        MessageBoxW(app.hwnd, L"当前密码验证失败。", L"错误", MB_ICONWARNING);
+    if (!check_password_with_throttle(app, app.hwnd, &entry, cur_pw, L"当前密码验证失败。")) {
         return;
     }
     bool target_custom = !entry.use_custom_password;
@@ -779,12 +939,12 @@ void do_edit_custom_password(WinApp& app) {
             L"提示", MB_ICONINFORMATION);
         return;
     }
+    if (!check_throttle_before_prompt(app, app.hwnd)) return;
     std::string cur_pw, new_pw;
     if (!win_show_edit_custom_pw_dialog(app.hwnd, entry.path, cur_pw, new_pw)) {
         return;
     }
-    if (!app.store->verify_entry_password(entry, cur_pw)) {
-        MessageBoxW(app.hwnd, L"当前独立密码验证失败。", L"错误", MB_ICONWARNING);
+    if (!check_password_with_throttle(app, app.hwnd, &entry, cur_pw, L"当前独立密码验证失败。")) {
         return;
     }
     if (!apply_entry_custom_password(app, entry, true, new_pw)) return;
@@ -797,6 +957,7 @@ void do_remove_selected(WinApp& app) {
         MessageBoxW(app.hwnd, L"请先选择一个目录。", L"提示", MB_ICONINFORMATION);
         return;
     }
+    if (!check_throttle_before_prompt(app, app.hwnd)) return;
     DirEntry& entry = app.store->entries_mut()[static_cast<size_t>(row)];
     std::string pw;
     bool dummy = false;
@@ -804,8 +965,7 @@ void do_remove_selected(WinApp& app) {
                                     false, L"验证密码以移出管理列表", L"", pw, dummy)) {
         return;
     }
-    if (!app.store->verify_entry_password(entry, pw)) {
-        MessageBoxW(app.hwnd, L"密码错误，无法移出受保护目录。", L"错误", MB_ICONWARNING);
+    if (!check_password_with_throttle(app, app.hwnd, &entry, pw, L"密码错误，无法移出受保护目录。")) {
         return;
     }
     if (entry.locked) {
@@ -830,11 +990,11 @@ void do_remove_selected(WinApp& app) {
 void do_change_master_pw(WinApp& app) {
     HWND owner = (IsWindowVisible(app.hwnd) && !IsIconic(app.hwnd)) ? app.hwnd : nullptr;
     bool has_master = app.store->has_master_password();
+    if (has_master && !check_throttle_before_prompt(app, owner)) return;
     std::string old_pw, new_pw;
     if (!win_show_master_password_dialog(owner, has_master, old_pw, new_pw)) return;
 
-    if (has_master && !app.store->verify_master_password(old_pw)) {
-        show_modal_msg(owner, L"原主密码不正确。", L"错误", MB_ICONWARNING);
+    if (has_master && !check_password_with_throttle(app, owner, nullptr, old_pw, L"原主密码不正确。")) {
         return;
     }
     if (!app.store->set_master_password(new_pw)) {
@@ -850,38 +1010,91 @@ void do_change_master_pw(WinApp& app) {
 void do_settings(WinApp& app) {
     HWND owner = (IsWindowVisible(app.hwnd) && !IsIconic(app.hwnd)) ? app.hwnd : nullptr;
     if (!ensure_master_password(app, owner)) return;
+    if (!check_throttle_before_prompt(app, owner)) return;
 
-    int mins = app.store->settings().auto_relock_minutes;
-    bool relock_on_lock = app.store->settings().relock_on_screen_lock;
-    std::string pw;
-    if (!win_show_settings_dialog(owner, mins, relock_on_lock, app.hotkey_ok, pw)) return;
+    WinSettingsData data;
+    data.auto_relock_minutes = app.store->settings().auto_relock_minutes;
+    data.require_master_on_open = app.store->settings().require_master_on_open;
+    data.allow_in_place_fallback = app.store->settings().allow_in_place_fallback;
+    data.hotkey = HotkeySpec::normalize(app.store->settings().hotkey, "Ctrl+Alt+L");
 
-    if (!app.store->verify_master_password(pw)) {
-        show_modal_msg(owner, L"主密码错误，未保存设置。", L"验证失败", MB_ICONWARNING);
+    if (app.hotkey_ok) {
+        UnregisterHotKey(app.hwnd, kHotkeyId);
+        app.hotkey_ok = false;
+    }
+
+    auto probe = [&](const std::string& cand, std::string& msg) -> bool {
+        UINT mods = 0, vk = 0;
+        if (!win_hotkey_to_native(cand, mods, vk)) {
+            msg = "无效的快捷键组合";
+            return false;
+        }
+        BOOL ok = RegisterHotKey(app.hwnd, kProbeHotkeyId, mods, vk);
+        if (ok) {
+            UnregisterHotKey(app.hwnd, kProbeHotkeyId);
+            msg = cand + " 可用（点保存后生效）";
+            return true;
+        }
+        msg = cand + " 已被系统或其他程序占用，请更换组合";
+        return false;
+    };
+
+    bool accepted = win_show_settings_dialog(owner, data, probe);
+    if (!accepted) {
+        apply_windows_hotkey(app, app.store->settings().hotkey);
         return;
     }
-    app.store->settings_mut().auto_relock_minutes = mins;
-    app.store->settings_mut().relock_on_screen_lock = relock_on_lock;
+    if (!check_password_with_throttle(app, owner, nullptr, data.master_pw,
+                                      L"主密码错误，未保存设置。")) {
+        apply_windows_hotkey(app, app.store->settings().hotkey);
+        return;
+    }
+    app.store->settings_mut().auto_relock_minutes = data.auto_relock_minutes;
+    app.store->settings_mut().require_master_on_open = data.require_master_on_open;
+    app.store->settings_mut().allow_in_place_fallback = data.allow_in_place_fallback;
+    app.store->settings_mut().hotkey = HotkeySpec::normalize(data.hotkey, "Ctrl+Alt+L");
     app.idle_triggered = false;
     std::string err;
     app.store->save(&err);
+    apply_windows_hotkey(app, app.store->settings().hotkey);
     refresh_ui(app);
     show_modal_msg(owner, L"安全设置已保存。", L"成功", MB_ICONINFORMATION);
 }
 
 void do_show_recovery(WinApp& app) {
     if (!ensure_master_password(app, app.hwnd)) return;
+    if (!check_throttle_before_prompt(app, app.hwnd)) return;
     std::string pw;
     if (!win_show_verify_master_dialog(
             app.hwnd, L"验证主密码",
             L"应急恢复说明包含手动恢复方法，为防止信息泄露，请先验证主密码：", pw)) {
         return;
     }
-    if (!app.store->verify_master_password(pw)) {
-        MessageBoxW(app.hwnd, L"主密码错误，无权查看应急恢复说明。", L"验证失败", MB_ICONWARNING);
+    if (!check_password_with_throttle(app, app.hwnd, nullptr, pw, L"主密码错误，无权查看应急恢复说明。")) {
         return;
     }
     win_show_recovery_dialog(app.hwnd);
+}
+
+void do_health_check(WinApp& app) {
+    HWND owner = (IsWindowVisible(app.hwnd) && !IsIconic(app.hwnd)) ? app.hwnd : nullptr;
+    if (!ensure_master_password(app, owner)) return;
+    if (!check_throttle_before_prompt(app, owner)) return;
+
+    std::string pw;
+    if (!win_show_verify_master_dialog(
+            owner, L"验证主密码",
+            L"保护区体检与修复可检查数据一致性与隐藏保护区，为保安全，请先验证主密码：", pw)) {
+        return;
+    }
+    if (!check_password_with_throttle(app, owner, nullptr, pw, L"主密码错误，无权打开体检与修复面板。")) {
+        return;
+    }
+    bool changed = false;
+    win_show_health_check_dialog(owner, *app.store, app.state_dir, changed);
+    if (changed) {
+        refresh_ui(app);
+    }
 }
 
 void do_drop_files(WinApp& app, HDROP hDrop) {
@@ -1185,6 +1398,9 @@ void draw_dir_list_item(WinApp& app, const DRAWITEMSTRUCT* dis) {
         SetBkMode(mem, TRANSPARENT);
         std::wstring wname = utf8_to_wide(basename_utf8(e.path));
         std::wstring wpath = utf8_to_wide(e.path);
+        if (e.locked && e.in_place_acl) {
+            wpath += L"  ·  [原位权限锁 · 占用解除后自动迁入保护区]";
+        }
 
         RECT nr{text_x, S(7), text_r, S(27)};
         HFONT old_f = static_cast<HFONT>(SelectObject(mem, app.bold_font ? app.bold_font : app.font));
@@ -1803,7 +2019,23 @@ void layout_main_window(WinApp& app, int width, int height) {
     x += bw_add + gap;
 
     int bw_lock_all = S(164);
-    MoveWindow(GetDlgItem(app.hwnd, IDC_BTN_LOCK_ALL), x, top_y, bw_lock_all, btn_h, TRUE);
+    if (HWND lock_btn = GetDlgItem(app.hwnd, IDC_BTN_LOCK_ALL)) {
+        std::wstring lock_txt = get_window_text_w_main(lock_btn);
+        if (!lock_txt.empty()) {
+            HDC hdc = GetDC(app.hwnd);
+            if (hdc) {
+                HFONT old_f = app.font ? static_cast<HFONT>(SelectObject(hdc, app.font)) : nullptr;
+                SIZE sz{};
+                GetTextExtentPoint32W(hdc, lock_txt.c_str(), static_cast<int>(lock_txt.size()), &sz);
+                if (old_f) SelectObject(hdc, old_f);
+                ReleaseDC(app.hwnd, hdc);
+                int measured = sz.cx + S(26);
+                if (measured > bw_lock_all) bw_lock_all = measured;
+                if (bw_lock_all > S(228)) bw_lock_all = S(228);
+            }
+        }
+        MoveWindow(lock_btn, x, top_y, bw_lock_all, btn_h, TRUE);
+    }
     x += bw_lock_all + gap;
 
     int search_w = rx - x;
@@ -2049,8 +2281,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
             DragAcceptFiles(hwnd, TRUE);
             add_or_update_tray(*app, false);
-            app->hotkey_ok = RegisterHotKey(hwnd, kHotkeyId, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'L') != 0;
-            WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
+            apply_windows_hotkey(*app, app->store->settings().hotkey);
             SetTimer(hwnd, kIdleTimerId, 3000, nullptr);
 
             RECT rc{};
@@ -2176,7 +2407,9 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     show_button_popup_menu(
                         hwnd, GetDlgItem(hwnd, IDC_BTN_MENU_SETTINGS),
                         {{IDM_TRAY_SETTINGS, L"安全与自动回锁设置..."},
-                         {IDM_TRAY_MASTER_PW, L"修改主密码..."}});
+                         {IDM_TRAY_MASTER_PW, L"修改主密码..."},
+                         {0, L""},
+                         {IDM_TRAY_HEALTH, L"保护区体检与一键修复..."}});
                     break;
                 case IDC_BTN_MENU_HELP:
                     show_button_popup_menu(
@@ -2189,8 +2422,13 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 case IDM_TRAY_SETTINGS: do_settings(*app); break;
                 case IDC_BTN_MASTER_PW:
                 case IDM_TRAY_MASTER_PW: do_change_master_pw(*app); break;
+                case IDC_BTN_HEALTH:
+                case IDM_TRAY_HEALTH: do_health_check(*app); break;
                 case IDC_BTN_ABOUT:
-                case IDM_TRAY_ABOUT: win_show_about_dialog(IsWindowVisible(hwnd) ? hwnd : nullptr); break;
+                case IDM_TRAY_ABOUT:
+                    win_show_about_dialog(IsWindowVisible(hwnd) ? hwnd : nullptr,
+                                          app->registered_hotkey);
+                    break;
                 case IDC_BTN_DIR_PW:
                 case IDM_ROW_DIR_PW: do_change_dir_password(*app); break;
                 case IDC_BTN_EDIT_CUSTOM_PW:
@@ -2279,11 +2517,34 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_HOTKEY:
             if (static_cast<int>(wp) == kHotkeyId) {
-                lock_all_dirs(*app, L"快捷键 Ctrl+Alt+L", true);
+                lock_all_dirs(*app, L"快捷键 " + utf8_to_wide(app->registered_hotkey), true);
             }
             return 0;
         case WM_TIMER:
             if (wp == kIdleTimerId) {
+                ++app->upgrade_tick_counter;
+                if (app->upgrade_tick_counter >= 5) {
+                    app->upgrade_tick_counter = 0;
+                    int upgraded = 0;
+                    for (auto& e : app->store->entries_mut()) {
+                        if (!e.locked || !e.in_place_acl) continue;
+                        bool upg = false;
+                        if (win_try_upgrade_in_place_entry(e, app->self_exe, app->state_dir,
+                                                           &upg, nullptr) &&
+                            upg) {
+                            ++upgraded;
+                        }
+                    }
+                    if (upgraded > 0) {
+                        app->store->save(nullptr);
+                        refresh_ui(*app);
+                        show_tray_balloon(
+                            *app, L"目录密匣",
+                            L"此前启用原位保护的 " + std::to_wstring(upgraded) +
+                                L" 个目录已无人占用，已自动迁移至安全保护区。");
+                    }
+                }
+
                 int mins = app->store->settings().auto_relock_minutes;
                 if (mins <= 0) {
                     app->idle_triggered = false;
@@ -2305,27 +2566,21 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
             }
             return 0;
-        case WM_WTSSESSION_CHANGE:
-            if (wp == WTS_SESSION_LOCK && app->store->settings().relock_on_screen_lock) {
-                lock_all_dirs(*app, L"锁屏自动回锁", false);
-            }
-            return 0;
-        case WM_POWERBROADCAST:
-            if (wp == PBT_APMSUSPEND && app->store->settings().relock_on_screen_lock) {
-                lock_all_dirs(*app, L"系统休眠前自动回锁", false);
-            }
-            return TRUE;
         case WM_APP_TRAY: {
             if (lp == WM_LBUTTONUP || lp == WM_LBUTTONDBLCLK) {
-                if (IsWindowVisible(hwnd)) ShowWindow(hwnd, SW_HIDE);
+                if (IsWindowVisible(hwnd) && !IsIconic(hwnd)) hide_main_window(*app);
                 else show_main_window(*app);
+            } else if (lp == NIN_BALLOONUSERCLICK || lp == NIN_SELECT) {
+                show_main_window(*app);
             } else if (lp == WM_RBUTTONUP) {
+                std::wstring tray_lock_lbl = L"一键全部锁定 (" + utf8_to_wide(app->registered_hotkey) + L")";
                 HMENU menu = CreatePopupMenu();
                 AppendMenuW(menu, MF_STRING, IDM_TRAY_OPEN, L"打开主界面");
-                AppendMenuW(menu, MF_STRING, IDM_TRAY_LOCK_ALL, L"一键全部锁定 (Ctrl+Alt+L)");
+                AppendMenuW(menu, MF_STRING, IDM_TRAY_LOCK_ALL, tray_lock_lbl.c_str());
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(menu, MF_STRING, IDM_TRAY_SETTINGS, L"安全设置");
                 AppendMenuW(menu, MF_STRING, IDM_TRAY_MASTER_PW, L"修改主密码");
+                AppendMenuW(menu, MF_STRING, IDM_TRAY_HEALTH, L"保护区体检与修复");
                 AppendMenuW(menu, MF_STRING, IDM_TRAY_ABOUT, L"关于 目录密匣");
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(menu, MF_STRING, IDM_TRAY_EXIT, L"退出 目录密匣");
@@ -2343,15 +2598,22 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (cmd) handle_command(*app, cmd->action, cmd->path);
             return 0;
         }
+        case WM_SYSCOMMAND:
+            if ((wp & 0xFFF0) == SC_MINIMIZE &&
+                app->store->settings().require_master_on_open &&
+                app->store->has_master_password()) {
+                hide_main_window(*app);
+                return 0;
+            }
+            break;
         case WM_CLOSE:
             if (!app->really_quit) {
-                ShowWindow(hwnd, SW_HIDE);
+                hide_main_window(*app);
                 return 0;
             }
             break;
         case WM_DESTROY:
             KillTimer(hwnd, kIdleTimerId);
-            WTSUnRegisterSessionNotification(hwnd);
             if (app->hotkey_ok) UnregisterHotKey(hwnd, kHotkeyId);
             remove_tray(*app);
             stop_pipe_server(*app);

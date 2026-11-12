@@ -2,6 +2,7 @@
 
 #include "idle_monitor.hpp"
 
+#include <QAction>
 #include <QCloseEvent>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -35,9 +36,11 @@ public:
     void handleExternalCommand(const QString& action, const QString& path);
     bool ensureMasterPasswordInitialized();
     void refreshState();
+    void showMainWindow();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void changeEvent(QEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
@@ -52,6 +55,7 @@ private slots:
     void onRemoveSelected();
     void onChangeMasterPassword();
     void onOpenSettings();
+    void onHealthCheck();
     void onShowRecoveryGuide();
     void onShowAbout();
     void onTableClicked(const QModelIndex& index);
@@ -64,7 +68,8 @@ private slots:
 private:
     void setupUi();
     void setupTray();
-    void showMainWindow();
+    void hideAndLockMainWindow();
+    void updateHotkeyDisplay();
     void openFolderInFileManager(const QString& path);
 
     bool lockNewPathFlow(const QString& path);
@@ -83,12 +88,16 @@ private:
     EmptyTableOverlay* empty_overlay_ = nullptr;
     QLabel* summary_label_ = nullptr;
     QLabel* policy_label_ = nullptr;
+    QPushButton* lock_all_btn_ = nullptr;
+    QAction* tray_lock_all_act_ = nullptr;
     QSystemTrayIcon* tray_ = nullptr;
     IdleAndHotkeyMonitor* monitor_ = nullptr;
 
     bool has_master_password_ = false;
     int auto_relock_minutes_ = 5;
-    bool relock_on_screen_lock_ = true;
+    bool require_master_on_open_ = false;
+    bool main_window_unlocked_ = false;
+    bool main_auth_prompt_open_ = false;
     QString hotkey_ = QStringLiteral("Ctrl+Alt+L");
     std::vector<UiDirRow> rows_;
     std::vector<size_t> visible_indices_;

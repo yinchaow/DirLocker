@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(dirlocker VERSION 2.1.1 LANGUAGES CXX)
+project(dirlocker VERSION 2.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,6 +14,7 @@ add_library(dirlocker_core STATIC
     src/core/crypto.cpp
     src/core/json_mini.cpp
     src/core/path_guard.cpp
+    src/core/security_util.cpp
     src/core/state_store.cpp
 )
 target_include_directories(dirlocker_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -36,9 +37,9 @@ if(WIN32)
         advapi32
         shell32
         ole32
+        oleaut32
         uuid
         comctl32
-        wtsapi32
         user32
         gdi32
         gdiplus
@@ -59,7 +60,7 @@ if(WIN32)
     endif()
 else()
     find_package(Threads REQUIRED)
-    find_package(Qt5 REQUIRED COMPONENTS Widgets Network DBus X11Extras)
+    find_package(Qt5 REQUIRED COMPONENTS Widgets Network X11Extras)
 
     set(CMAKE_AUTOMOC ON)
     set(CMAKE_AUTORCC ON)
@@ -83,7 +84,6 @@ else()
         dirlocker_core
         Qt5::Widgets
         Qt5::Network
-        Qt5::DBus
         Qt5::X11Extras
         X11
         Xss

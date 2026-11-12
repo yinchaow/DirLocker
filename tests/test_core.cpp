@@ -2,6 +2,7 @@
 #include "../src/core/json_mini.hpp"
 #include "../src/core/path_guard.hpp"
 #include "../src/core/protocol.hpp"
+#include "../src/core/security_util.hpp"
 #include "../src/core/state_store.hpp"
 
 #include <cstdlib>
@@ -167,7 +168,9 @@ void test_path_guard_and_state() {
         store.entries_mut().push_back(e2);
 
         store.settings_mut().auto_relock_minutes = 12;
-        store.settings_mut().relock_on_screen_lock = false;
+        store.settings_mut().require_master_on_open = true;
+        store.settings_mut().allow_in_place_fallback = true;
+        store.settings_mut().hotkey = "ctrl + alt + shift + k";
 
         std::string err;
         CHECK(store.save(&err));
@@ -181,7 +184,9 @@ void test_path_guard_and_state() {
         CHECK(loaded.verify_master_password("Master#2026"));
         CHECK(!loaded.verify_master_password("Wrong"));
         CHECK(loaded.settings().auto_relock_minutes == 12);
-        CHECK(loaded.settings().relock_on_screen_lock == false);
+        CHECK(loaded.settings().require_master_on_open == true);
+        CHECK(loaded.settings().allow_in_place_fallback == true);
+        CHECK(loaded.settings().hotkey == "Ctrl+Alt+Shift+K");
         CHECK(loaded.entries().size() == 2);
 
         const DirEntry* f1 = loaded.find_by_path(r_ok.canonical_path);
@@ -221,6 +226,25 @@ void test_path_guard_and_state() {
         CHECK(recovered2.entries().size() == 2);
     }
 
+    // Verify legacy settings schema (with removed relock_on_screen_lock) still loads cleanly
+    {
+        FILE* legacy = fopen(state_file.c_str(), "wb");
+        CHECK(legacy != nullptr);
+        const char* legacy_json =
+            "{\"version\":1,\"settings\":{\"auto_relock_minutes\":8,"
+            "\"relock_on_screen_lock\":true,\"hotkey\":\"Alt+Shift+L\"},\"entries\":[]}";
+        fwrite(legacy_json, 1, strlen(legacy_json), legacy);
+        fclose(legacy);
+
+        StateStore leg_store(state_file);
+        std::string err;
+        CHECK(leg_store.load(&err));
+        CHECK(leg_store.settings().auto_relock_minutes == 8);
+        CHECK(leg_store.settings().require_master_on_open == false);
+        CHECK(leg_store.settings().allow_in_place_fallback == false);
+        CHECK(leg_store.settings().hotkey == "Alt+Shift+L");
+    }
+
     // Cleanup temp directory
     unlink(link_dir.c_str());
     rmdir(nested_dir.c_str());
@@ -232,12 +256,55 @@ void test_path_guard_and_state() {
 #endif
 }
 
+void test_hotkey_and_auth_throttle() {
+    using dirlocker::AuthThrottle;
+    using dirlocker::HotkeySpec;
+
+    HotkeySpec spec;
+    std::string err;
+    CHECK(HotkeySpec::parse("ctrl + alt + shift + f9", spec, &err));
+    CHECK(spec.to_string() == "Ctrl+Alt+Shift+F9");
+    CHECK(HotkeySpec::parse("Ctrl+0", spec, &err));
+    CHECK(spec.to_string() == "Ctrl+0");
+    CHECK(HotkeySpec::normalize("invalid", "Ctrl+Alt+L") == "Ctrl+Alt+L");
+
+    CHECK(!HotkeySpec::parse("", spec, &err));
+    CHECK(!HotkeySpec::parse("L", spec, &err));
+    CHECK(!HotkeySpec::parse("Shift+L", spec, &err));
+    CHECK(!HotkeySpec::parse("Alt+F4", spec, &err));
+    CHECK(!HotkeySpec::parse("Ctrl+Alt+Tab", spec, &err));
+    CHECK(!HotkeySpec::parse("Ctrl+Alt+A+B", spec, &err));
+    CHECK(HotkeySpec::parse("Ctrl+Alt+F4", spec, &err));
+
+    AuthThrottle th;
+    int64_t t = 100000;
+    for (int i = 0; i < 4; ++i) {
+        CHECK(th.record_failure(t) == 0);
+        CHECK(th.remaining_cooldown_seconds(t) == 0);
+    }
+    CHECK(th.record_failure(t) == 30);
+    CHECK(th.remaining_cooldown_seconds(t) == 30);
+    CHECK(th.remaining_cooldown_seconds(t + 10000) == 20);
+    CHECK(th.remaining_cooldown_seconds(t + 30000) == 0);
+
+    CHECK(th.record_failure(t + 30000) == 60);
+    CHECK(th.remaining_cooldown_seconds(t + 30000) == 60);
+    CHECK(th.record_failure(t + 90000) == 300);
+    CHECK(th.record_failure(t + 400000) == 300);
+    CHECK(th.consecutive_failures() == 8);
+
+    th.record_success();
+    CHECK(th.consecutive_failures() == 0);
+    CHECK(th.remaining_cooldown_seconds(t + 400000) == 0);
+}
+
 }  // namespace
 
 int main() {
     test_crypto_vectors();
     test_json();
     test_path_guard_and_state();
+    test_hotkey_and_auth_throttle();
     std::cout << "All DirLocker core unit tests passed.\n";
     return 0;
 }

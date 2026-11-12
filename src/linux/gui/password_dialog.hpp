@@ -8,9 +8,12 @@
 #include <QSpinBox>
 #include <QString>
 
+#include <functional>
+
 class QFileSystemModel;
 class QLabel;
 class QPushButton;
+class QTextBrowser;
 class QTreeView;
 
 namespace dirlocker {
@@ -118,20 +121,56 @@ private:
 class SettingsDialog : public QDialog {
     Q_OBJECT
 public:
-    SettingsDialog(int autoRelockMinutes, bool relockOnScreenLock,
-                   const QString& hotkey, bool hotkeyOk, QWidget* parent = nullptr);
+    SettingsDialog(int autoRelockMinutes, bool requireMasterOnOpen,
+                   const QString& hotkey,
+                   std::function<bool(const QString&, QString&)> probeHotkey,
+                   QWidget* parent = nullptr);
 
     int autoRelockMinutes() const;
-    bool relockOnScreenLock() const;
+    bool requireMasterOnOpen() const;
+    QString hotkey() const;
     QString masterPassword() const;
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
 
 private slots:
     void onAccept();
 
 private:
+    void applyHotkeyCandidate(const QString& raw);
+
     QSpinBox* minutes_spin_ = nullptr;
-    QCheckBox* screen_lock_cb_ = nullptr;
+    QCheckBox* master_open_cb_ = nullptr;
+    QLineEdit* hotkey_edit_ = nullptr;
+    QLabel* hk_status_label_ = nullptr;
     QLineEdit* pw_edit_ = nullptr;
+    QString chosen_hotkey_;
+    bool hotkey_valid_ = true;
+    std::function<bool(const QString&, QString&)> probe_hotkey_;
+};
+
+class HealthCheckDialog : public QDialog {
+    Q_OBJECT
+public:
+    explicit HealthCheckDialog(const QString& masterPw, QWidget* parent = nullptr);
+
+    bool changed() const { return changed_; }
+
+private slots:
+    void runScan();
+    void runRepair();
+    void updateRepairButtonState();
+
+private:
+    QString master_pw_;
+    bool changed_ = false;
+    int repairable_count_ = 0;
+    int dead_record_count_ = 0;
+    QLabel* summary_label_ = nullptr;
+    QTextBrowser* report_view_ = nullptr;
+    QCheckBox* clean_dead_cb_ = nullptr;
+    QPushButton* repair_btn_ = nullptr;
 };
 
 class VerifyMasterDialog : public QDialog {

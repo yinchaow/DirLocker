@@ -1,8 +1,12 @@
 #include "password_dialog.hpp"
+#include "daemon_client.hpp"
+#include "../../core/security_util.hpp"
 
+#include <algorithm>
 #include <QAction>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
 #include <QFileSystemModel>
 #include <QFormLayout>
@@ -10,6 +14,7 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QItemSelectionModel>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
@@ -18,6 +23,7 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QStandardPaths>
+#include <QTextBrowser>
 #include <QTimer>
 #include <QTreeView>
 #include <QVBoxLayout>
@@ -522,11 +528,32 @@ void EditCustomPasswordDialog::onAccept() {
     accept();
 }
 
-SettingsDialog::SettingsDialog(int autoRelockMinutes, bool relockOnScreenLock,
-                               const QString& hotkey, bool hotkeyOk, QWidget* parent)
-    : QDialog(parent) {
+namespace {
+
+QString qtKeyToToken(int key) {
+    if (key >= Qt::Key_A && key <= Qt::Key_Z) {
+        return QString(QChar('A' + (key - Qt::Key_A)));
+    }
+    if (key >= Qt::Key_0 && key <= Qt::Key_9) {
+        return QString(QChar('0' + (key - Qt::Key_0)));
+    }
+    if (key >= Qt::Key_F1 && key <= Qt::Key_F12) {
+        return QStringLiteral("F%1").arg(key - Qt::Key_F1 + 1);
+    }
+    return {};
+}
+
+}  // namespace
+
+SettingsDialog::SettingsDialog(int autoRelockMinutes, bool requireMasterOnOpen,
+                               const QString& hotkey,
+                               std::function<bool(const QString&, QString&)> probeHotkey,
+                               QWidget* parent)
+    : QDialog(parent),
+      chosen_hotkey_(QString::fromStdString(HotkeySpec::normalize(hotkey.toStdString(), "Ctrl+Alt+L"))),
+      probe_hotkey_(std::move(probeHotkey)) {
     setWindowTitle(QStringLiteral("安全与自动回锁设置"));
-    setMinimumWidth(440);
+    setMinimumWidth(490);
 
     auto* layout = new QVBoxLayout(this);
     layout->setSizeConstraint(QLayout::SetMinimumSize);
@@ -539,16 +566,27 @@ SettingsDialog::SettingsDialog(int autoRelockMinutes, bool relockOnScreenLock,
     minutes_spin_->setSuffix(QStringLiteral(" 分钟"));
     form->addRow(QStringLiteral("无操作自动回锁:"), minutes_spin_);
 
-    screen_lock_cb_ = new QCheckBox(QStringLiteral("锁屏或系统休眠时自动锁定所有目录"), this);
-    screen_lock_cb_->setChecked(relockOnScreenLock);
-    form->addRow(QStringLiteral("锁屏联动:"), screen_lock_cb_);
+    master_open_cb_ = new QCheckBox(
+        QStringLiteral("打开主窗口时要求验证主密码（关闭或最小化后自动锁定主页）"), this);
+    master_open_cb_->setChecked(requireMasterOnOpen);
+    form->addRow(QStringLiteral("主窗口保护:"), master_open_cb_);
 
-    auto* hkLabel = new QLabel(
-        hotkey + (hotkeyOk ? QStringLiteral("（全局快捷键已生效）")
-                           : QStringLiteral("（当前会话未注册全局热键，可使用托盘一键锁定）")),
-        this);
-    hkLabel->setWordWrap(true);
-    form->addRow(QStringLiteral("一键全锁热键:"), hkLabel);
+    auto* hkRow = new QHBoxLayout();
+    hotkey_edit_ = new QLineEdit(chosen_hotkey_, this);
+    hotkey_edit_->setReadOnly(true);
+    hotkey_edit_->setPlaceholderText(QStringLiteral("点击此处后直接按下新的组合键"));
+    hotkey_edit_->installEventFilter(this);
+    auto* resetHkBtn = new QPushButton(QStringLiteral("恢复默认"), this);
+    connect(resetHkBtn, &QPushButton::clicked, this, [this]() {
+        applyHotkeyCandidate(QStringLiteral("Ctrl+Alt+L"));
+    });
+    hkRow->addWidget(hotkey_edit_, 1);
+    hkRow->addWidget(resetHkBtn);
+    form->addRow(QStringLiteral("一键全锁热键:"), hkRow);
+
+    hk_status_label_ = new QLabel(this);
+    hk_status_label_->setWordWrap(true);
+    form->addRow(QStringLiteral(""), hk_status_label_);
 
     pw_edit_ = make_pw_edit(this, QStringLiteral("需验证主密码方可保存设置"));
     form->addRow(QStringLiteral("验证主密码:"), pw_edit_);
@@ -558,19 +596,270 @@ SettingsDialog::SettingsDialog(int autoRelockMinutes, bool relockOnScreenLock,
     connect(buttons, &QDialogButtonBox::accepted, this, &SettingsDialog::onAccept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     layout->addWidget(buttons);
+
+    applyHotkeyCandidate(chosen_hotkey_);
+    pw_edit_->setFocus();
+}
+
+void SettingsDialog::applyHotkeyCandidate(const QString& raw) {
+    HotkeySpec spec;
+    std::string perr;
+    if (!HotkeySpec::parse(raw.toStdString(), spec, &perr)) {
+        hotkey_valid_ = false;
+        hk_status_label_->setStyleSheet(QStringLiteral("color:#b91c1c; font-size:12px;"));
+        hk_status_label_->setText(QStringLiteral("✗ %1").arg(QString::fromStdString(perr)));
+        return;
+    }
+    chosen_hotkey_ = QString::fromStdString(spec.to_string());
+    hotkey_edit_->setText(chosen_hotkey_);
+    QString msg;
+    bool ok = probe_hotkey_ ? probe_hotkey_(chosen_hotkey_, msg) : true;
+    hotkey_valid_ = ok;
+    hk_status_label_->setStyleSheet(
+        ok ? QStringLiteral("color:#15803d; font-size:12px;")
+           : QStringLiteral("color:#b91c1c; font-size:12px;"));
+    if (msg.isEmpty()) {
+        msg = ok ? QStringLiteral("%1 可用（保存后生效）").arg(chosen_hotkey_)
+                 : QStringLiteral("%1 已被其他程序占用，请更换组合").arg(chosen_hotkey_);
+    }
+    hk_status_label_->setText((ok ? QStringLiteral("✓ ") : QStringLiteral("⚠ ")) + msg);
+}
+
+bool SettingsDialog::eventFilter(QObject* obj, QEvent* event) {
+    if (obj == hotkey_edit_ && event->type() == QEvent::KeyPress) {
+        auto* ke = static_cast<QKeyEvent*>(event);
+        const Qt::KeyboardModifiers mods = ke->modifiers();
+        const int key = ke->key();
+
+        const bool hasCtrl = mods.testFlag(Qt::ControlModifier);
+        const bool hasAlt = mods.testFlag(Qt::AltModifier);
+        const bool hasShift = mods.testFlag(Qt::ShiftModifier);
+
+        if (!hasCtrl && !hasAlt &&
+            (key == Qt::Key_Tab || key == Qt::Key_Backtab ||
+             key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Escape)) {
+            return false;
+        }
+        if (key == Qt::Key_Control || key == Qt::Key_Shift ||
+            key == Qt::Key_Alt || key == Qt::Key_Meta || key == Qt::Key_AltGr) {
+            return true;
+        }
+
+        QString tok = qtKeyToToken(key);
+        if (tok.isEmpty()) {
+            hk_status_label_->setStyleSheet(QStringLiteral("color:#b45309; font-size:12px;"));
+            hk_status_label_->setText(QStringLiteral("⚠ 仅支持字母 A-Z、数字 0-9 或功能键 F1-F12 作为主键"));
+            return true;
+        }
+        if (!hasCtrl && !hasAlt) {
+            hk_status_label_->setStyleSheet(QStringLiteral("color:#b45309; font-size:12px;"));
+            hk_status_label_->setText(QStringLiteral("⚠ 请同时按住 Ctrl 或 Alt 修饰键"));
+            return true;
+        }
+        QString cand;
+        if (hasCtrl) cand += QStringLiteral("Ctrl+");
+        if (hasAlt) cand += QStringLiteral("Alt+");
+        if (hasShift) cand += QStringLiteral("Shift+");
+        cand += tok;
+        applyHotkeyCandidate(cand);
+        return true;
+    }
+    return QDialog::eventFilter(obj, event);
 }
 
 int SettingsDialog::autoRelockMinutes() const { return minutes_spin_->value(); }
-bool SettingsDialog::relockOnScreenLock() const { return screen_lock_cb_->isChecked(); }
+bool SettingsDialog::requireMasterOnOpen() const { return master_open_cb_->isChecked(); }
+QString SettingsDialog::hotkey() const { return chosen_hotkey_; }
 QString SettingsDialog::masterPassword() const { return pw_edit_->text(); }
 
 void SettingsDialog::onAccept() {
+    HotkeySpec spec;
+    std::string perr;
+    if (!HotkeySpec::parse(chosen_hotkey_.toStdString(), spec, &perr)) {
+        showMessageZh(this, QMessageBox::Warning, QStringLiteral("热键无效"),
+                      QString::fromStdString(perr));
+        hotkey_edit_->setFocus();
+        return;
+    }
+    if (!hotkey_valid_) {
+        QString msg;
+        if (!probe_hotkey_ || !probe_hotkey_(chosen_hotkey_, msg)) {
+            showMessageZh(this, QMessageBox::Warning, QStringLiteral("热键冲突"),
+                          msg.isEmpty() ? QStringLiteral("所选热键当前被占用，请更换组合。") : msg);
+            hotkey_edit_->setFocus();
+            return;
+        }
+    }
     if (pw_edit_->text().isEmpty()) {
-        showMessageZh(this, QMessageBox::Warning, QStringLiteral("提示"), QStringLiteral("请输入主密码以确认修改。"));
+        showMessageZh(this, QMessageBox::Warning, QStringLiteral("提示"),
+                      QStringLiteral("请输入主密码以确认修改。"));
         pw_edit_->setFocus();
         return;
     }
     accept();
+}
+
+HealthCheckDialog::HealthCheckDialog(const QString& masterPw, QWidget* parent)
+    : QDialog(parent), master_pw_(masterPw) {
+    setWindowTitle(QStringLiteral("保护区体检与一键修复"));
+    resize(660, 520);
+    setMinimumSize(580, 440);
+
+    auto* layout = new QVBoxLayout(this);
+
+    auto* card = new QFrame(this);
+    card->setStyleSheet(QStringLiteral(
+        "QFrame { background-color:#f6f8fa; border:1px solid #d0d7de; border-radius:6px; }"));
+    auto* cardLayout = new QHBoxLayout(card);
+    cardLayout->setContentsMargins(12, 10, 12, 10);
+    summary_label_ = new QLabel(QStringLiteral("正在体检保护区与托管目录状态..."), card);
+    summary_label_->setStyleSheet(QStringLiteral("border:none; font-weight:600; color:#1f2328;"));
+    cardLayout->addWidget(summary_label_);
+    layout->addWidget(card);
+
+    report_view_ = new QTextBrowser(this);
+    report_view_->setOpenLinks(false);
+    report_view_->setStyleSheet(QStringLiteral(
+        "QTextBrowser { background-color:#ffffff; border:1px solid #d0d7de; border-radius:6px; padding:8px; }"));
+    layout->addWidget(report_view_, 1);
+
+    clean_dead_cb_ = new QCheckBox(
+        QStringLiteral("修复时同时移除已失联记录（仅移出目录与保护区均不在磁盘上的条目，绝不删除任何实际文件）"),
+        this);
+    connect(clean_dead_cb_, &QCheckBox::toggled, this, &HealthCheckDialog::updateRepairButtonState);
+    layout->addWidget(clean_dead_cb_);
+
+    auto* btnRow = new QHBoxLayout();
+    auto* scanBtn = new QPushButton(QStringLiteral("重新扫描"), this);
+    repair_btn_ = new QPushButton(QStringLiteral("一键修复可处理项"), this);
+    repair_btn_->setDefault(true);
+    auto* closeBtn = new QPushButton(QStringLiteral("关闭"), this);
+    connect(scanBtn, &QPushButton::clicked, this, &HealthCheckDialog::runScan);
+    connect(repair_btn_, &QPushButton::clicked, this, &HealthCheckDialog::runRepair);
+    connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
+    btnRow->addWidget(scanBtn);
+    btnRow->addStretch();
+    btnRow->addWidget(repair_btn_);
+    btnRow->addWidget(closeBtn);
+    layout->addLayout(btnRow);
+
+    runScan();
+}
+
+void HealthCheckDialog::updateRepairButtonState() {
+    bool can = (repairable_count_ > 0) || (clean_dead_cb_->isChecked() && dead_record_count_ > 0);
+    repair_btn_->setEnabled(can);
+}
+
+void HealthCheckDialog::runScan() {
+    JsonValue params = JsonValue::object();
+    params.set("password", master_pw_.toStdString());
+    auto reply = DaemonClient::send("diagnose", std::move(params));
+    if (!reply.transport_ok || !reply.ok) {
+        summary_label_->setText(QStringLiteral("体检扫描失败"));
+        report_view_->setPlainText(QString::fromStdString(reply.message));
+        repairable_count_ = 0;
+        dead_record_count_ = 0;
+        updateRepairButtonState();
+        return;
+    }
+
+    const auto& d = reply.data;
+    int total = static_cast<int>(d.get("total_entries").as_int(0));
+    int ok_cnt = static_cast<int>(d.get("ok_count").as_int(0));
+    repairable_count_ = static_cast<int>(d.get("repairable_count").as_int(0));
+    int manual_cnt = static_cast<int>(d.get("manual_count").as_int(0));
+    int unmounted_cnt = static_cast<int>(d.get("unmounted_count").as_int(0));
+    dead_record_count_ = 0;
+
+    summary_label_->setText(
+        QStringLiteral("总条目 %1  |  状态正常 %2  |  可一键修复 %3  |  需关注 %4  |  离线磁盘 %5")
+            .arg(total)
+            .arg(ok_cnt)
+            .arg(repairable_count_)
+            .arg(manual_cnt)
+            .arg(unmounted_cnt));
+
+    const auto& items = d.get("items");
+    if (!items.is_array() || items.as_array().empty()) {
+        report_view_->setHtml(QStringLiteral(
+            "<div style='padding:12px; color:#15803d; font-weight:600; font-size:13px;'>"
+            "✓ 所有受管目录状态一致，各磁盘保护区无孤立目录或异常入口。</div>"));
+        updateRepairButtonState();
+        return;
+    }
+
+    QString html = QStringLiteral("<div style='font-size:13px; line-height:1.55;'>");
+    for (const auto& it : items.as_array()) {
+        std::string kind = it.get("kind").as_string();
+        bool auto_rep = it.get("auto_repairable").as_bool(false);
+        bool allow_rm = it.get("allow_remove_record").as_bool(false);
+        if (allow_rm) ++dead_record_count_;
+
+        QString tag = QStringLiteral("[待关注]");
+        QString color = QStringLiteral("#b45309");
+        if (auto_rep) {
+            tag = QStringLiteral("[可自动修复]");
+            color = QStringLiteral("#0d47a1");
+        } else if (kind == "unmounted_disk") {
+            tag = QStringLiteral("[磁盘未挂载]");
+            color = QStringLiteral("#5f6368");
+        } else if (kind == "conflict_both_exist" || kind == "orphan_vault_dir") {
+            tag = QStringLiteral("[需人工核对]");
+            color = QStringLiteral("#b91c1c");
+        }
+
+        QString sum = QString::fromStdString(it.get("summary").as_string()).toHtmlEscaped();
+        QString dp = QString::fromStdString(it.get("display_path").as_string()).toHtmlEscaped();
+        QString vp = QString::fromStdString(it.get("vault_path").as_string()).toHtmlEscaped();
+        QString hint = QString::fromStdString(it.get("repair_hint").as_string()).toHtmlEscaped();
+
+        html += QStringLiteral("<p style='margin:0 0 10px 0;'>"
+                               "<b style='color:%1;'>%2</b> <b>%3</b><br/>"
+                               "<span style='color:#5f6368; font-family:monospace;'>&nbsp;&nbsp;路径: %4</span>")
+                    .arg(color, tag, sum, dp);
+        if (!vp.isEmpty() && vp != dp) {
+            html += QStringLiteral("<br/><span style='color:#5f6368; font-family:monospace;'>&nbsp;&nbsp;保护区: %1</span>")
+                        .arg(vp);
+        }
+        html += QStringLiteral("<br/><span style='color:%1;'>&nbsp;&nbsp;建议: %2</span></p>")
+                    .arg(color, hint);
+    }
+    html += QStringLiteral("</div>");
+    report_view_->setHtml(html);
+    updateRepairButtonState();
+}
+
+void HealthCheckDialog::runRepair() {
+    JsonValue params = JsonValue::object();
+    params.set("password", master_pw_.toStdString());
+    params.set("clean_dead_records", clean_dead_cb_->isChecked());
+    auto reply = DaemonClient::send("repair", std::move(params));
+    if (!reply.transport_ok || !reply.ok) {
+        showMessageZh(this, QMessageBox::Warning, QStringLiteral("修复失败"),
+                      QString::fromStdString(reply.message));
+        return;
+    }
+
+    int fixed = static_cast<int>(reply.data.get("repaired_count").as_int(0));
+    if (fixed > 0) {
+        changed_ = true;
+        QString msg = QStringLiteral("已完成 %1 项安全修复：\n").arg(fixed);
+        const auto& details = reply.data.get("details");
+        if (details.is_array()) {
+            size_t lim = std::min<size_t>(details.as_array().size(), 8);
+            for (size_t i = 0; i < lim; ++i) {
+                msg += QStringLiteral("• %1\n")
+                           .arg(QString::fromStdString(details.as_array()[i].as_string()));
+            }
+            if (details.as_array().size() > 8) msg += QStringLiteral("...");
+        }
+        showMessageZh(this, QMessageBox::Information, QStringLiteral("修复完成"), msg);
+    } else {
+        showMessageZh(this, QMessageBox::Information, QStringLiteral("提示"),
+                      QStringLiteral("当前没有需要自动修复的项目。"));
+    }
+    runScan();
 }
 
 VerifyMasterDialog::VerifyMasterDialog(const QString& title, const QString& prompt, QWidget* parent)

@@ -5,9 +5,22 @@
 #endif
 #include <windows.h>
 
+#include <functional>
 #include <string>
 
 namespace dirlocker {
+
+class StateStore;
+
+struct WinSettingsData {
+    int auto_relock_minutes = 5;
+    bool require_master_on_open = false;
+    bool allow_in_place_fallback = false;
+    std::string hotkey = "Ctrl+Alt+L";
+    std::string master_pw;
+};
+
+bool win_hotkey_to_native(const std::string& raw, UINT& out_mods, UINT& out_vk);
 
 // Creates crisp Microsoft YaHei UI font scaled to DPI.
 HFONT create_ui_font(int dpi, int pt = 9, bool bold = false);
@@ -47,12 +60,16 @@ bool win_show_change_dir_pw_dialog(HWND parent, const std::string& dir_path,
 bool win_show_edit_custom_pw_dialog(HWND parent, const std::string& dir_path,
                                     std::string& cur_pw, std::string& new_pw);
 
-bool win_show_settings_dialog(HWND parent, int& auto_relock_minutes,
-                              bool& relock_on_screen_lock, bool hotkey_ok,
-                              std::string& master_pw);
+bool win_show_settings_dialog(
+    HWND parent,
+    WinSettingsData& data,
+    const std::function<bool(const std::string& candidate_hk, std::string& status_msg)>& probe_hotkey);
+
+bool win_show_health_check_dialog(HWND parent, StateStore& store,
+                                  const std::string& state_dir, bool& out_changed);
 
 void win_show_recovery_dialog(HWND parent);
 
-void win_show_about_dialog(HWND parent);
+void win_show_about_dialog(HWND parent, const std::string& current_hotkey);
 
 }  // namespace dirlocker

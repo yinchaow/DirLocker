@@ -3,6 +3,7 @@
 #include "crypto.hpp"
 #include "json_mini.hpp"
 #include "path_guard.hpp"
+#include "security_util.hpp"
 
 #include <array>
 #include <chrono>
@@ -248,9 +249,10 @@ bool parse_state_json(const std::string& content,
         if (relock_min < 0) relock_min = 0;
         if (relock_min > 1440) relock_min = 1440;
         st_out.auto_relock_minutes = relock_min;
-        st_out.relock_on_screen_lock = st.get("relock_on_screen_lock").as_bool(true);
+        st_out.require_master_on_open = st.get("require_master_on_open").as_bool(false);
+        st_out.allow_in_place_fallback = st.get("allow_in_place_fallback").as_bool(false);
         std::string hk = st.get("hotkey").as_string_or("Ctrl+Alt+L");
-        if (!hk.empty()) st_out.hotkey = hk;
+        st_out.hotkey = HotkeySpec::normalize(hk, "Ctrl+Alt+L");
     }
 
     std::vector<DirEntry> parsed_entries;
@@ -332,8 +334,9 @@ bool StateStore::save(std::string* err) const {
 
     JsonValue st = JsonValue::object();
     st.set("auto_relock_minutes", settings_.auto_relock_minutes);
-    st.set("relock_on_screen_lock", settings_.relock_on_screen_lock);
-    st.set("hotkey", settings_.hotkey);
+    st.set("require_master_on_open", settings_.require_master_on_open);
+    st.set("allow_in_place_fallback", settings_.allow_in_place_fallback);
+    st.set("hotkey", HotkeySpec::normalize(settings_.hotkey, "Ctrl+Alt+L"));
     root.set("settings", std::move(st));
 
     JsonValue arr = JsonValue::array();

@@ -4,10 +4,10 @@ Unicode True
 !include "LogicLib.nsh"
 
 !ifndef APP_VERSION
-  !define APP_VERSION "2.1.1"
+  !define APP_VERSION "2.2.0"
 !endif
 !ifndef OUT_FILE
-  !define OUT_FILE "DirLocker_Setup_v2.1.1.exe"
+  !define OUT_FILE "DirLocker_Setup_v2.2.0.exe"
 !endif
 !ifndef SRC_WIN_DIR
   !define SRC_WIN_DIR ".."
@@ -149,7 +149,7 @@ SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "安装目录密匣核心程序至 Program Files，并注册右键菜单与无角标加密目录图标。"
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecAutoStart} "登录 Windows 时静默启动后台托盘保护，支持双击加密目录直接弹窗及超时/锁屏自动回锁。"
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecAutoStart} "登录 Windows 时静默启动后台托盘保护，支持双击加密目录直接弹窗及闲置自动回锁。"
   !insertmacro MUI_DESCRIPTION_TEXT ${SecStartMenu} "在开始菜单中创建“目录密匣”启动与卸载快捷方式。"
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "在桌面创建“目录密匣”快捷方式。"
 !insertmacro MUI_FUNCTION_DESCRIPTION_END

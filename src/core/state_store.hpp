@@ -31,8 +31,9 @@ struct DirEntry {
 };
 
 struct AppSettings {
-    int auto_relock_minutes = 5;       // 0 means disabled
-    bool relock_on_screen_lock = true; // Auto lock when workstation/screen locks
+    int auto_relock_minutes = 5;          // 0 means disabled
+    bool require_master_on_open = false;  // Require master password before showing main window
+    bool allow_in_place_fallback = false; // Windows: allow in-place ACL fallback if occupied
     std::string hotkey = "Ctrl+Alt+L";
 };
 

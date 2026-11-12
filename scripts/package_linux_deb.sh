@@ -55,16 +55,16 @@ install -Dm644 "${ICON_SRC}/mimetypes/128x128/dirlocker-folder.png" \
 
 cat > "${PKG_ROOT}/DEBIAN/control" <<'EOF'
 Package: dirlocker
-Version: 2.1.1
+Version: 2.2.0
 Section: utils
 Priority: optional
 Architecture: amd64
 Maintainer: DirLocker <dirlocker@local>
-Depends: libc6 (>= 2.31), libstdc++6 (>= 9), libqt5core5a (>= 5.12), libqt5gui5 (>= 5.12), libqt5widgets5 (>= 5.12), libqt5network5 (>= 5.12), libqt5dbus5 (>= 5.12), libqt5x11extras5 (>= 5.12), libx11-6, libxss1
+Depends: libc6 (>= 2.31), libstdc++6 (>= 9), libqt5core5a (>= 5.12), libqt5gui5 (>= 5.12), libqt5widgets5 (>= 5.12), libqt5network5 (>= 5.12), libqt5x11extras5 (>= 5.12), libx11-6, libxss1
 Description: DirLocker lightweight password lock for directories
  Protects directories on Kylin V10 SP1 / Ubuntu 20.04 with global master
- password or per-directory custom password, Peony context menu, hotkey lock,
- and idle/screen-lock auto-relock.
+ password or per-directory custom password, Peony context menu, custom hotkey
+ lock, idle auto-relock, occupancy protection, and vault health repair.
 EOF
 
 cat > "${PKG_ROOT}/DEBIAN/postinst" <<'EOF'

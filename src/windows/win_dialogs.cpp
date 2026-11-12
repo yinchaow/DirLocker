@@ -1,7 +1,10 @@
 #include "win_dialogs.hpp"
 
 #include "../core/path_guard.hpp"
+#include "../core/security_util.hpp"
+#include "../core/state_store.hpp"
 #include "../core/version.hpp"
+#include "acl_locker.hpp"
 #include "resource.h"
 
 #include <commctrl.h>
@@ -35,6 +38,8 @@ constexpr COLORREF kColorMuted = RGB(95, 99, 104);
 constexpr COLORREF kColorText = RGB(31, 35, 40);
 constexpr COLORREF kColorAccent = RGB(13, 71, 161);
 constexpr COLORREF kColorWarning = RGB(180, 83, 9);
+constexpr COLORREF kColorDanger = RGB(185, 28, 28);
+constexpr COLORREF kColorOk = RGB(21, 128, 61);
 
 void dlg_add_round_rect_path(Gdiplus::GraphicsPath& path, Gdiplus::REAL x, Gdiplus::REAL y,
                              Gdiplus::REAL w, Gdiplus::REAL h, Gdiplus::REAL r) {
@@ -106,6 +111,19 @@ public:
     int req_resize_px_h = 0;
     std::function<bool()> on_validate;
     std::function<void(int id)> on_command;
+    std::function<bool(const MSG&)> pre_filter;
+
+    void set_label_color(HWND lbl, COLORREF c) {
+        for (auto& ls : label_styles) {
+            if (ls.hwnd == lbl) {
+                ls.color = c;
+                InvalidateRect(lbl, nullptr, TRUE);
+                return;
+            }
+        }
+        label_styles.push_back({lbl, c});
+        InvalidateRect(lbl, nullptr, TRUE);
+    }
 
     int S(int px) const { return scale_dpi(px, dpi); }
 
@@ -727,6 +745,7 @@ public:
 
         MSG msg{};
         while (!done && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            if (pre_filter && pre_filter(msg)) continue;
             if (IsDialogMessageW(hwnd, &msg)) continue;
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
@@ -1292,34 +1311,169 @@ bool win_show_edit_custom_pw_dialog(HWND parent, const std::string& dir_path,
     return dlg.run_modal(parent, cur_edit);
 }
 
-bool win_show_settings_dialog(HWND parent, int& auto_relock_minutes,
-                              bool& relock_on_screen_lock, bool hotkey_ok,
-                              std::string& master_pw) {
+namespace {
+
+std::string vk_to_hotkey_token(WPARAM vk) {
+    if (vk >= 'A' && vk <= 'Z') return std::string(1, static_cast<char>(vk));
+    if (vk >= '0' && vk <= '9') return std::string(1, static_cast<char>(vk));
+    if (vk >= VK_F1 && vk <= VK_F12) {
+        return "F" + std::to_string(static_cast<int>(vk - VK_F1 + 1));
+    }
+    return {};
+}
+
+bool is_modifier_vk(WPARAM vk) {
+    return vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT ||
+           vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL ||
+           vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU ||
+           vk == VK_LWIN || vk == VK_RWIN;
+}
+
+}  // namespace
+
+bool win_hotkey_to_native(const std::string& raw, UINT& out_mods, UINT& out_vk) {
+    HotkeySpec spec;
+    if (!HotkeySpec::parse(raw, spec)) return false;
+
+    out_mods = MOD_NOREPEAT;
+    if (spec.ctrl) out_mods |= MOD_CONTROL;
+    if (spec.alt) out_mods |= MOD_ALT;
+    if (spec.shift) out_mods |= MOD_SHIFT;
+
+    if (spec.key.size() == 1) {
+        char c = spec.key[0];
+        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+            out_vk = static_cast<UINT>(c);
+            return true;
+        }
+        return false;
+    }
+    if (spec.key.size() >= 2 && spec.key[0] == 'F') {
+        int fn = std::stoi(spec.key.substr(1));
+        if (fn >= 1 && fn <= 12) {
+            out_vk = static_cast<UINT>(VK_F1 + (fn - 1));
+            return true;
+        }
+    }
+    return false;
+}
+
+bool win_show_settings_dialog(
+    HWND parent,
+    WinSettingsData& data,
+    const std::function<bool(const std::string& candidate_hk, std::string& status_msg)>& probe_hotkey) {
     ModalDialogBase dlg;
-    if (!dlg.create(parent, L"安全与自动回锁设置", 450, 235)) return false;
+    const int dlg_w = 506;
+    if (!dlg.create(parent, L"安全与自动回锁设置", dlg_w, 340)) return false;
 
-    dlg.add_label(L"无操作自动回锁（分钟，0 表示关闭）：", 16, 18, 250, 20);
-    HWND min_edit = dlg.add_edit(276, 14, 154, 24, 5001, false, true);
-    SetWindowTextW(min_edit, std::to_wstring(auto_relock_minutes).c_str());
+    std::string chosen_hk = HotkeySpec::normalize(data.hotkey, "Ctrl+Alt+L");
 
-    HWND lock_cb = dlg.add_checkbox(L"Windows 锁屏（Win+L）或休眠时自动锁定所有目录",
-                                    16, 52, 414, 22, 5002, relock_on_screen_lock);
+    dlg.add_label(L"无操作自动回锁（分钟，0 表示关闭）：", 16, 18, 280, 20);
+    HWND min_edit = dlg.add_edit(308, 14, 180, 24, 5001, false, true);
+    SetWindowTextW(min_edit, std::to_wstring(data.auto_relock_minutes).c_str());
 
-    const std::wstring hk_txt = hotkey_ok
-        ? L"一键全锁热键：Ctrl + Alt + L（已注册生效）"
-        : L"一键全锁热键：Ctrl + Alt + L（热键被其他软件占用，可使用托盘锁定）";
-    int hk_h = dlg.measure_label_logical_h(hk_txt, 414, false);
-    if (hk_h < 22) hk_h = 22;
-    dlg.add_label(hk_txt, 16, 86, 414, hk_h);
+    HWND master_open_cb = dlg.add_checkbox(
+        L"打开主窗口时要求验证主密码（关闭或最小化到托盘后自动锁定主界面）",
+        16, 50, dlg_w - 32, 22, 5002, data.require_master_on_open);
 
-    int pw_y = 86 + hk_h + 10;
+    const std::wstring fallback_txt =
+        L"遇到文档或资源管理器占用时允许降级为原位权限锁（开启后将在旁生成伴随解锁入口，关闭占用后自动迁入保护区；默认关闭）";
+    int fb_h = dlg.measure_label_logical_h(fallback_txt, dlg_w - 56, false);
+    if (fb_h < 34) fb_h = 34;
+    HWND fallback_cb = dlg.add_checkbox(fallback_txt, 16, 80, dlg_w - 32, fb_h, 5003,
+                                        data.allow_in_place_fallback);
+
+    int hk_y = 80 + fb_h + 12;
+    dlg.add_label(L"一键全锁全局热键：", 16, hk_y + 4, 134, 20);
+    HWND hk_edit = dlg.add_edit(152, hk_y, 238, 24, 5004, false, false);
+    LONG_PTR est = GetWindowLongPtrW(hk_edit, GWL_STYLE);
+    SetWindowLongPtrW(hk_edit, GWL_STYLE, est | ES_READONLY);
+    SetWindowTextW(hk_edit, utf8_to_wide(chosen_hk).c_str());
+    dlg.add_button(L"恢复默认", 398, hk_y - 1, 90, 26, 5005, false);
+
+    int hk_tip_y = hk_y + 30;
+    const std::wstring hk_tip_placeholder =
+        L"点击上方热键框后直接按下新的组合键（需包含 Ctrl 或 Alt + 字母/数字/F1-F12）。";
+    int tip_h = dlg.measure_label_logical_h(hk_tip_placeholder, dlg_w - 32, false);
+    if (tip_h < 32) tip_h = 32;
+    HWND hk_status_lbl = dlg.add_styled_label(hk_tip_placeholder, 16, hk_tip_y, dlg_w - 32,
+                                              tip_h, kColorMuted, false, 5006);
+
+    int pw_y = hk_tip_y + tip_h + 10;
     dlg.add_label(L"验证主密码：", 16, pw_y + 4, 100, 20);
-    HWND pw = dlg.add_edit(120, pw_y, 310, 24, 5003, true);
+    HWND pw = dlg.add_edit(120, pw_y, dlg_w - 136, 24, 5007, true);
 
-    int btn_y = pw_y + 52;
-    dlg.add_button(L"保存", 252, btn_y, 86, 28, IDOK, true);
-    dlg.add_button(L"取消", 346, btn_y, 86, 28, IDCANCEL);
-    dlg.resize_client(450, btn_y + 28 + 16, parent, true);
+    int btn_y = pw_y + 46;
+    dlg.add_button(L"保存", dlg_w - 196, btn_y, 86, 28, IDOK, true);
+    dlg.add_button(L"取消", dlg_w - 102, btn_y, 86, 28, IDCANCEL);
+    dlg.resize_client(dlg_w, btn_y + 28 + 16, parent, true);
+
+    bool hk_valid = true;
+    auto update_hk_ui = [&](const std::string& raw_candidate) {
+        HotkeySpec spec;
+        std::string parse_err;
+        if (!HotkeySpec::parse(raw_candidate, spec, &parse_err)) {
+            hk_valid = false;
+            dlg.set_label_color(hk_status_lbl, kColorDanger);
+            SetWindowTextW(hk_status_lbl, utf8_to_wide("✗ " + parse_err).c_str());
+            return;
+        }
+        chosen_hk = spec.to_string();
+        SetWindowTextW(hk_edit, utf8_to_wide(chosen_hk).c_str());
+        std::string probe_msg;
+        bool avail = probe_hotkey ? probe_hotkey(chosen_hk, probe_msg) : true;
+        hk_valid = avail;
+        dlg.set_label_color(hk_status_lbl, avail ? kColorOk : kColorDanger);
+        if (probe_msg.empty()) {
+            probe_msg = avail ? (chosen_hk + " 可用（点保存后生效）")
+                              : (chosen_hk + " 已被其他程序占用，请更换组合");
+        }
+        SetWindowTextW(hk_status_lbl, utf8_to_wide((avail ? "✓ " : "⚠ ") + probe_msg).c_str());
+    };
+    update_hk_ui(chosen_hk);
+
+    dlg.pre_filter = [&](const MSG& msg) -> bool {
+        if (GetFocus() != hk_edit) return false;
+        if (msg.message != WM_KEYDOWN && msg.message != WM_SYSKEYDOWN) return false;
+
+        WPARAM vk = msg.wParam;
+        bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+        bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+
+        if (!ctrl && !alt && (vk == VK_TAB || vk == VK_RETURN || vk == VK_ESCAPE)) {
+            return false;
+        }
+        if (is_modifier_vk(vk)) {
+            return true;
+        }
+
+        std::string key_tok = vk_to_hotkey_token(vk);
+        if (key_tok.empty()) {
+            dlg.set_label_color(hk_status_lbl, kColorWarning);
+            SetWindowTextW(hk_status_lbl, L"⚠ 仅支持字母 A-Z、数字 0-9 或 F1-F12 作为主键");
+            return true;
+        }
+        std::string cand;
+        if (ctrl) cand += "Ctrl+";
+        if (alt) cand += "Alt+";
+        if (shift) cand += "Shift+";
+        cand += key_tok;
+
+        if (!ctrl && !alt) {
+            dlg.set_label_color(hk_status_lbl, kColorWarning);
+            SetWindowTextW(hk_status_lbl, L"⚠ 请同时按住 Ctrl 或 Alt 修饰键");
+            return true;
+        }
+        update_hk_ui(cand);
+        return true;
+    };
+
+    dlg.on_command = [&](int id) {
+        if (id == 5005) {
+            update_hk_ui("Ctrl+Alt+L");
+        }
+    };
 
     dlg.on_validate = [&]() {
         std::wstring mstr = get_window_text_w(min_edit);
@@ -1334,19 +1488,194 @@ bool win_show_settings_dialog(HWND parent, int& auto_relock_minutes,
         if (mins < 0) mins = 0;
         if (mins > 1440) mins = 1440;
 
+        HotkeySpec spec;
+        std::string parse_err;
+        if (!HotkeySpec::parse(chosen_hk, spec, &parse_err)) {
+            MessageBoxW(dlg.hwnd, utf8_to_wide(parse_err).c_str(), L"热键无效", MB_ICONWARNING);
+            SetFocus(hk_edit);
+            return false;
+        }
+        if (!hk_valid) {
+            std::string msg;
+            if (!probe_hotkey || !probe_hotkey(spec.to_string(), msg)) {
+                MessageBoxW(dlg.hwnd,
+                            utf8_to_wide(msg.empty() ? "所选全局热键当前被占用，请更换后再保存。" : msg).c_str(),
+                            L"热键冲突", MB_ICONWARNING);
+                SetFocus(hk_edit);
+                return false;
+            }
+        }
+
         std::wstring p = get_window_text_w(pw);
         if (p.empty()) {
             MessageBoxW(dlg.hwnd, L"请输入主密码以确认保存设置。", L"提示", MB_ICONWARNING);
             SetFocus(pw);
             return false;
         }
-        auto_relock_minutes = mins;
-        relock_on_screen_lock = SendMessageW(lock_cb, BM_GETCHECK, 0, 0) == BST_CHECKED;
-        master_pw = wide_to_utf8(p);
+        data.auto_relock_minutes = mins;
+        data.require_master_on_open = SendMessageW(master_open_cb, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        data.allow_in_place_fallback = SendMessageW(fallback_cb, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        data.hotkey = spec.to_string();
+        data.master_pw = wide_to_utf8(p);
         return true;
     };
 
     return dlg.run_modal(parent, pw);
+}
+
+bool win_show_health_check_dialog(HWND parent, StateStore& store,
+                                  const std::string& state_dir, bool& out_changed) {
+    out_changed = false;
+    ModalDialogBase dlg;
+    const int dlg_w = 660;
+    if (!dlg.create(parent, L"保护区体检与一键修复", dlg_w, 520)) return false;
+
+    const COLORREF kCardBg = RGB(246, 248, 250);
+    const COLORREF kCardBd = RGB(208, 215, 222);
+    size_t card_idx = dlg.add_card(16, 14, dlg_w - 32, 46, kCardBg, kCardBd, 6, true);
+    HWND summary_lbl = dlg.add_styled_label(L"正在扫描保护区与条目一致性...", 28, 24, dlg_w - 56, 24,
+                                            kColorText, true, 5201);
+    dlg.bind_ctrl_card(summary_lbl, card_idx);
+
+    const int box_y = 72;
+    const int box_w = dlg_w - 32;
+    const int box_h = 330;
+    HWND rich_ctrl = dlg.add_rich_box(16, box_y, box_w, box_h, 5202, RGB(255, 255, 255), true, true);
+    HWND plain_ctrl = nullptr;
+    if (!rich_ctrl) {
+        plain_ctrl = dlg.add_readonly_text(L"", 16, box_y, box_w, box_h, 5202);
+    }
+
+    const std::wstring clean_txt =
+        L"修复时同时移除已失联记录（仅移出原目录与保护区均不在磁盘上的条目，绝不删除任何实际文件）";
+    int cb_y = box_y + box_h + 10;
+    int cb_h = dlg.measure_label_logical_h(clean_txt, dlg_w - 56, false);
+    if (cb_h < 22) cb_h = 22;
+    HWND clean_cb = dlg.add_checkbox(clean_txt, 16, cb_y, dlg_w - 32, cb_h, 5203, false);
+
+    int btn_y = cb_y + cb_h + 12;
+    dlg.add_button(L"重新扫描", 16, btn_y, 100, 28, 5204, false);
+    HWND repair_btn = dlg.add_button(L"一键修复可处理项", 390, btn_y, 152, 28, 5205, true);
+    HWND close_btn = dlg.add_button(L"关闭", 552, btn_y, 92, 28, IDCANCEL, false);
+    dlg.resize_client(dlg_w, btn_y + 28 + 16, parent, true);
+
+    WinHealthReport last_rep{};
+
+    auto update_repair_btn = [&]() {
+        bool clean_dead = SendMessageW(clean_cb, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        int dead_cnt = 0;
+        if (clean_dead) {
+            for (const auto& it : last_rep.items) {
+                if (it.allow_remove_record) ++dead_cnt;
+            }
+        }
+        bool can = (last_rep.repairable_count > 0 || dead_cnt > 0);
+        EnableWindow(repair_btn, can ? TRUE : FALSE);
+    };
+
+    auto run_scan = [&]() {
+        last_rep = win_diagnose_state(store, state_dir);
+        std::wstring sum =
+            L"总条目 " + std::to_wstring(last_rep.total_entries) +
+            L"  |  状态正常 " + std::to_wstring(last_rep.ok_count) +
+            L"  |  可一键修复 " + std::to_wstring(last_rep.repairable_count) +
+            L"  |  需关注 " + std::to_wstring(last_rep.manual_count) +
+            L"  |  离线磁盘 " + std::to_wstring(last_rep.unmounted_count);
+        SetWindowTextW(summary_lbl, sum.c_str());
+
+        if (rich_ctrl) {
+            SendMessageW(rich_ctrl, EM_SETREADONLY, FALSE, 0);
+            SetWindowTextW(rich_ctrl, L"");
+
+            const wchar_t* kUi = L"Microsoft YaHei UI";
+            const wchar_t* kMono = L"Consolas";
+            if (last_rep.items.empty()) {
+                ModalDialogBase::append_rich_span(
+                    rich_ctrl, L"\r  ✓ 所有托管目录状态一致，且各保护区无孤立目录或异常入口。\r",
+                    kUi, 190, kColorOk, 0, true, false, 120, 40);
+            } else {
+                for (const auto& item : last_rep.items) {
+                    COLORREF tag_fg = kColorWarning;
+                    std::wstring tag = L"[待关注] ";
+                    if (item.auto_repairable) {
+                        tag_fg = kColorAccent;
+                        tag = L"[可自动修复] ";
+                    } else if (item.kind == WinHealthItem::IssueKind::kUnmountedDrive) {
+                        tag_fg = kColorMuted;
+                        tag = L"[磁盘未就绪] ";
+                    } else if (item.kind == WinHealthItem::IssueKind::kLeftoverVaultAndDir ||
+                               item.kind == WinHealthItem::IssueKind::kOrphanVaultDir) {
+                        tag_fg = kColorDanger;
+                        tag = L"[需人工核对] ";
+                    }
+
+                    ModalDialogBase::append_rich_span(rich_ctrl, tag.c_str(), kUi, 180, tag_fg, 0, true, false, 60, 20);
+                    ModalDialogBase::append_rich_span(rich_ctrl, (utf8_to_wide(item.summary) + L"\r").c_str(),
+                                                      kUi, 180, kColorText, 0, true, false, 60, 20);
+                    ModalDialogBase::append_rich_span(rich_ctrl, (L"路径: " + utf8_to_wide(item.display_path) + L"\r").c_str(),
+                                                      kMono, 170, kColorMuted, 0, false, false, 180, 15);
+                    if (!item.vault_path.empty() && item.vault_path != item.display_path) {
+                        ModalDialogBase::append_rich_span(rich_ctrl, (L"保护区: " + utf8_to_wide(item.vault_path) + L"\r").c_str(),
+                                                          kMono, 170, kColorMuted, 0, false, false, 180, 15);
+                    }
+                    ModalDialogBase::append_rich_span(rich_ctrl, (L"建议: " + utf8_to_wide(item.repair_hint) + L"\r").c_str(),
+                                                      kUi, 175, tag_fg, 0, false, false, 180, 75);
+                }
+            }
+            SendMessageW(rich_ctrl, EM_SETREADONLY, TRUE, 0);
+            SendMessageW(rich_ctrl, EM_EMPTYUNDOBUFFER, 0, 0);
+            SendMessageW(rich_ctrl, EM_SETSEL, 0, 0);
+            SendMessageW(rich_ctrl, EM_SCROLLCARET, 0, 0);
+        } else if (plain_ctrl) {
+            std::wstring text;
+            if (last_rep.items.empty()) {
+                text = L"所有托管目录状态一致，且各保护区无孤立目录。";
+            } else {
+                for (const auto& item : last_rep.items) {
+                    text += utf8_to_wide(item.summary) + L"\r\n  " +
+                            utf8_to_wide(item.display_path) + L"\r\n  " +
+                            utf8_to_wide(item.repair_hint) + L"\r\n\r\n";
+                }
+            }
+            SetWindowTextW(plain_ctrl, text.c_str());
+        }
+        update_repair_btn();
+    };
+
+    dlg.on_command = [&](int id) {
+        if (id == 5203) {
+            update_repair_btn();
+        } else if (id == 5204) {
+            run_scan();
+        } else if (id == 5205) {
+            bool clean_dead = SendMessageW(clean_cb, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            int fixed = 0;
+            std::vector<std::string> details;
+            std::string err;
+            if (!win_repair_state(store, state_dir, clean_dead, &fixed, &details, &err)) {
+                MessageBoxW(dlg.hwnd,
+                            utf8_to_wide(err.empty() ? "修复或保存状态失败" : err).c_str(),
+                            L"修复失败", MB_ICONERROR);
+                return;
+            }
+            if (fixed > 0) {
+                out_changed = true;
+                std::wstring msg = L"已完成 " + std::to_wstring(fixed) + L" 项安全修复：\n";
+                for (size_t i = 0; i < details.size() && i < 8; ++i) {
+                    msg += L"• " + utf8_to_wide(details[i]) + L"\n";
+                }
+                if (details.size() > 8) msg += L"...";
+                MessageBoxW(dlg.hwnd, msg.c_str(), L"修复完成", MB_ICONINFORMATION);
+            } else {
+                MessageBoxW(dlg.hwnd, L"当前没有需要自动修复的项目。", L"提示", MB_ICONINFORMATION);
+            }
+            run_scan();
+        }
+    };
+
+    run_scan();
+    dlg.run_modal(parent, close_btn);
+    return out_changed;
 }
 
 void copy_text_to_clipboard(HWND owner, const std::wstring& raw) {
@@ -1450,12 +1779,14 @@ void win_show_recovery_dialog(HWND parent) {
         add_cmd(L" attrib -r \"原目录完整路径.dlock\" ", 15);
         add_cmd(L" del \"原目录完整路径.dlock\" ", 110);
 
-        add_h(L"2. 情形二：原文件夹仍在原地（不是 .dlock 文件），仅提示无法打开/拒绝访问（少数原位锁定）");
+        add_h(L"2. 情形二：原文件夹仍在原地，仅提示无法打开/拒绝访问（原位权限锁 / 网络共享）");
         add_span(L"直接在 CMD 中执行（若提示无权，请以 ", 140, 25);
         add_span(L"管理员身份运行 CMD", 140, 25, true, kWarnFg);
         add_span(L" 并先执行 ", 140, 25);
         add_path(L" takeown /f \"目标目录路径\" ", 140, 25);
-        add_span(L"）：\r", 140, 25);
+        add_span(L"）；若旁侧存在 ", 140, 25);
+        add_path(L" （已锁定，点此解锁）.dlock ", 140, 25);
+        add_span(L" 也可参照上条清理：\r", 140, 25);
         add_cmd(L" icacls \"目标目录路径\" /remove:d *S-1-1-0 ", 20);
 
         SendMessageW(content_ctrl, EM_SETREADONLY, TRUE, 0);
@@ -1469,7 +1800,7 @@ void win_show_recovery_dialog(HWND parent) {
             L"   在 CMD 中依次执行：chcp 65001 -> type \"原目录.dlock\" -> icacls \"保护区\" /remove:d *S-1-1-0 -> "
             L"dir /a -> icacls \"保护区\\<id>\" /remove:d *S-1-1-0 -> attrib -s -h -> move 回原路径 -> "
             L"icacls \".dlock\" /remove:d *S-1-1-0 -> attrib -r -> del \".dlock\"\r\n\r\n"
-            L"2. 情形二：原文件夹仍在原地（不是 .dlock 文件），仅提示无法打开\r\n"
+            L"2. 情形二：原文件夹仍在原地，仅提示无法打开（原位权限锁）\r\n"
             L"   icacls \"目标目录路径\" /remove:d *S-1-1-0";
         content_ctrl = dlg.add_readonly_text(fallback, 16, box_y, box_w, box_h, 6001);
     }
@@ -1487,10 +1818,11 @@ void win_show_recovery_dialog(HWND parent) {
     dlg.run_modal(parent, ok_btn);
 }
 
-void win_show_about_dialog(HWND parent) {
+void win_show_about_dialog(HWND parent, const std::string& current_hotkey) {
     ModalDialogBase dlg;
     const int dlg_w = 556;
     if (!dlg.create(parent, L"关于 目录密匣", dlg_w, 430)) return;
+    const std::wstring whk = utf8_to_wide(HotkeySpec::normalize(current_hotkey, "Ctrl+Alt+L"));
 
     dlg.add_app_icon(20, 18, 48);
     int title_w = dlg.measure_text_logical_w(L"目录密匣", dlg.title_font);
@@ -1555,8 +1887,8 @@ void win_show_about_dialog(HWND parent) {
         ModalDialogBase::append_rich_span(feat_re, L"• ", kUi, 180, kColorAccent, 0, true, false, 40, 35);
         ModalDialogBase::append_rich_span(feat_re, L"全锁与自动回锁：", kUi, 180, kColorText, 0, true, false, 40, 35);
         ModalDialogBase::append_rich_span(feat_re, L"支持 ", kUi, 180, kColorText, 0, false, false, 40, 35);
-        ModalDialogBase::append_rich_span(feat_re, L" Ctrl+Alt+L ", kMono, 175, kKeyFg, kKeyBg, false, true, 40, 35);
-        ModalDialogBase::append_rich_span(feat_re, L" 一键全锁，及闲置、锁屏自动锁定\r", kUi, 180, kColorText, 0, false, false, 40, 35);
+        ModalDialogBase::append_rich_span(feat_re, (L" " + whk + L" ").c_str(), kMono, 175, kKeyFg, kKeyBg, false, true, 40, 35);
+        ModalDialogBase::append_rich_span(feat_re, L" 一键全锁，及闲置超时自动锁定\r", kUi, 180, kColorText, 0, false, false, 40, 35);
 
         add_feat(L"零文件内容改动：", L"绝不加密或修改目录内原始文件，安全锁定与无损还原", false);
 
@@ -1573,7 +1905,7 @@ void win_show_about_dialog(HWND parent) {
             L"• 双重密码体系：支持统一主密码与单目录独立密码，随时自由切换与改密\n"
             L"• 快捷验证解锁：已加密目录独立标识，双击直接输入密码即可进入\n"
             L"• 批量拖拽加锁：支持将单个或多个目录直接拖入窗口批量锁定\n"
-            L"• 全锁与自动回锁：支持 Ctrl+Alt+L 一键全锁，及闲置、锁屏自动锁定\n"
+            L"• 全锁与自动回锁：支持 " + whk + L" 一键全锁，及闲置超时自动锁定\n"
             L"• 零文件内容改动：绝不加密或修改目录内原始文件，安全锁定与无损还原";
         int measured = dlg.measure_label_logical_h(fallback_feat, inner_w, false);
         if (measured > feat_h) feat_h = measured;
