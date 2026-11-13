@@ -1820,8 +1820,8 @@ void win_show_recovery_dialog(HWND parent) {
 
 void win_show_about_dialog(HWND parent, const std::string& current_hotkey) {
     ModalDialogBase dlg;
-    const int dlg_w = 556;
-    if (!dlg.create(parent, L"关于 目录密匣", dlg_w, 430)) return;
+    const int dlg_w = 640;
+    if (!dlg.create(parent, L"关于 目录密匣", dlg_w, 470)) return;
     const std::wstring whk = utf8_to_wide(HotkeySpec::normalize(current_hotkey, "Ctrl+Alt+K"));
 
     dlg.add_app_icon(20, 18, 48);
@@ -1859,7 +1859,7 @@ void win_show_about_dialog(HWND parent, const std::string& current_hotkey) {
     const int card_y = 186;
     const int card_w = dlg_w - 40;
     const int inner_w = card_w - 24;
-    int feat_h = 148;
+    int feat_h = 180;
     size_t card_idx = dlg.add_card(20, card_y, card_w, feat_h + 20, kCardBg, kCardBd, 6, true);
 
     HWND feat_re = dlg.add_rich_box(32, card_y + 10, inner_w, 280, 7002, kCardBg, false, false);
@@ -1880,17 +1880,18 @@ void win_show_about_dialog(HWND parent, const std::string& current_hotkey) {
             }
         };
 
-        add_feat(L"双重密码体系：", L"支持统一主密码与单目录独立密码，随时自由切换与改密");
-        add_feat(L"快捷验证解锁：", L"已加密目录独立标识，双击即可输入密码解锁进入");
-        add_feat(L"批量拖拽加锁：", L"支持将单个或多个目录直接拖入窗口批量锁定");
+        add_feat(L"双重密码体系：", L"支持统一主密码与单目录独立密码，可自由改密与切换");
+        add_feat(L"快捷验证解锁：", L"受保护目录无角标独立标识，双击直接弹窗输入密码解锁");
+        add_feat(L"批量拖拽加锁：", L"支持单个或多个文件夹直接拖入主窗口快速批量锁定");
 
         ModalDialogBase::append_rich_span(feat_re, L"• ", kUi, 180, kColorAccent, 0, true, false, 40, 35);
-        ModalDialogBase::append_rich_span(feat_re, L"全锁与自动回锁：", kUi, 180, kColorText, 0, true, false, 40, 35);
+        ModalDialogBase::append_rich_span(feat_re, L"全锁与防占用：", kUi, 180, kColorText, 0, true, false, 40, 35);
         ModalDialogBase::append_rich_span(feat_re, L"支持 ", kUi, 180, kColorText, 0, false, false, 40, 35);
         ModalDialogBase::append_rich_span(feat_re, (L" " + whk + L" ").c_str(), kMono, 175, kKeyFg, kKeyBg, false, true, 40, 35);
-        ModalDialogBase::append_rich_span(feat_re, L" 一键全锁，及闲置超时自动锁定\r", kUi, 180, kColorText, 0, false, false, 40, 35);
+        ModalDialogBase::append_rich_span(feat_re, L" 一键全锁与闲置回锁，被占用时智能跳过\r", kUi, 180, kColorText, 0, false, false, 40, 35);
 
-        add_feat(L"零文件内容改动：", L"绝不加密或修改目录内原始文件，安全锁定与无损还原", false);
+        add_feat(L"界面与防爆破：", L"可选打开主界面验证主密码，连续输错密码触发冷却退避");
+        add_feat(L"无损与体检修复：", L"绝不改动原始文件内容，内置保护区健康体检与安全修复", false);
 
         SendMessageW(feat_re, EM_SETREADONLY, TRUE, 0);
         SendMessageW(feat_re, EM_EMPTYUNDOBUFFER, 0, 0);
@@ -1902,11 +1903,12 @@ void win_show_about_dialog(HWND parent, const std::string& current_hotkey) {
     } else {
         const std::wstring fallback_feat =
             L"核心功能：\n"
-            L"• 双重密码体系：支持统一主密码与单目录独立密码，随时自由切换与改密\n"
-            L"• 快捷验证解锁：已加密目录独立标识，双击直接输入密码即可进入\n"
-            L"• 批量拖拽加锁：支持将单个或多个目录直接拖入窗口批量锁定\n"
-            L"• 全锁与自动回锁：支持 " + whk + L" 一键全锁，及闲置超时自动锁定\n"
-            L"• 零文件内容改动：绝不加密或修改目录内原始文件，安全锁定与无损还原";
+            L"• 双重密码体系：支持统一主密码与单目录独立密码，可自由改密与切换\n"
+            L"• 快捷验证解锁：受保护目录无角标独立标识，双击直接弹窗输入密码解锁\n"
+            L"• 批量拖拽加锁：支持单个或多个文件夹直接拖入主窗口快速批量锁定\n"
+            L"• 全锁与防占用：支持 " + whk + L" 一键全锁与闲置回锁，被占用时智能跳过\n"
+            L"• 界面与防爆破：可选打开主界面验证主密码，连续输错密码触发冷却退避\n"
+            L"• 无损与体检修复：绝不改动原始文件内容，内置保护区健康体检与安全修复";
         int measured = dlg.measure_label_logical_h(fallback_feat, inner_w, false);
         if (measured > feat_h) feat_h = measured;
         HWND lbl = dlg.add_label(fallback_feat, 32, card_y + 10, inner_w, feat_h);

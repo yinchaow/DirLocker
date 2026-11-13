@@ -900,9 +900,9 @@ void MainWindow::refreshState() {
             rawHk = "Ctrl+Alt+K";
         }
         HotkeySpec hkSpec;
-        std::string normHk;
-        if (HotkeySpec::parse(rawHk, hkSpec, &normHk)) {
-            hotkey_ = QString::fromStdString(normHk);
+        std::string parseErr;
+        if (HotkeySpec::parse(rawHk, hkSpec, &parseErr)) {
+            hotkey_ = QString::fromStdString(hkSpec.to_string());
         } else {
             hotkey_ = QStringLiteral("Ctrl+Alt+K");
         }
@@ -1673,7 +1673,7 @@ void MainWindow::onShowRecoveryGuide() {
 void MainWindow::onShowAbout() {
     QDialog dlg(this);
     dlg.setWindowTitle(QStringLiteral("关于 目录密匣"));
-    dlg.setMinimumWidth(556);
+    dlg.setMinimumWidth(640);
 
     auto* root = new QVBoxLayout(&dlg);
     root->setSizeConstraint(QLayout::SetMinimumSize);
@@ -1749,13 +1749,13 @@ void MainWindow::onShowAbout() {
 
     auto* featBody = new QLabel(
         QStringLiteral(
-            "<div style=\"line-height:165%; color:#1f2328;\">"
-            "<span style=\"color:#0d47a1;\">•</span> <b>双重密码体系</b>：支持统一主密码与单目录独立密码，随时自由切换与改密<br/>"
-            "<span style=\"color:#0d47a1;\">•</span> <b>快捷验证解锁</b>：已加密目录独立标识，双击即可输入密码解锁进入<br/>"
-            "<span style=\"color:#0d47a1;\">•</span> <b>批量拖拽加锁</b>：支持将单个或多个目录直接拖入窗口批量锁定<br/>"
-            "<span style=\"color:#0d47a1;\">•</span> <b>全锁与防占用</b>：支持 <b style=\"color:#0d47a1;\">[%1]</b> 一键全锁与闲置自动回锁，程序占用目录时自动跳过并提示<br/>"
-            "<span style=\"color:#0d47a1;\">•</span> <b>主界保护与防爆破</b>：可选打开主窗口验证主密码，连续输错密码触发退避冷却时间<br/>"
-            "<span style=\"color:#0d47a1;\">•</span> <b>无损与体检修复</b>：零文件内容改动，内置保护区健康体检与安全无损一键修复"
+            "<div style=\"line-height:175%; color:#1f2328; white-space:nowrap;\">"
+            "<span style=\"color:#0d47a1;\">•</span> <b>双重密码体系</b>：支持统一主密码与单目录独立密码，可自由改密与切换<br/>"
+            "<span style=\"color:#0d47a1;\">•</span> <b>快捷验证解锁</b>：受保护目录无角标独立标识，双击直接弹窗输入密码解锁<br/>"
+            "<span style=\"color:#0d47a1;\">•</span> <b>批量拖拽加锁</b>：支持单个或多个文件夹直接拖入主窗口快速批量加锁<br/>"
+            "<span style=\"color:#0d47a1;\">•</span> <b>全锁与防占用</b>：支持 <span style=\"background-color:#e2e8f0; color:#0c4a6e; font-family:monospace; font-weight:600;\">&nbsp;%1&nbsp;</span> 一键全锁与闲置回锁，被占用时智能跳过<br/>"
+            "<span style=\"color:#0d47a1;\">•</span> <b>界面与防爆破</b>：可选打开主界面验证主密码，连续输错密码触发冷却退避<br/>"
+            "<span style=\"color:#0d47a1;\">•</span> <b>无损与体检修复</b>：绝不改动原始文件内容，内置保护区健康体检与安全修复"
             "</div>").arg(hotkey_.toHtmlEscaped()),
         featCard);
     featBody->setTextFormat(Qt::RichText);
