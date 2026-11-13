@@ -55,7 +55,7 @@ install -Dm644 "${ICON_SRC}/mimetypes/128x128/dirlocker-folder.png" \
 
 cat > "${PKG_ROOT}/DEBIAN/control" <<'EOF'
 Package: dirlocker
-Version: 2.2.1
+Version: 2.2.2
 Section: utils
 Priority: optional
 Architecture: amd64

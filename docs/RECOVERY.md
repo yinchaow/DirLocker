@@ -12,7 +12,7 @@
 ## 常规使用方式
 
 ### Windows 10 / 11
-1. 运行安装程序 `DirLocker_Setup_v2.2.1.exe` 按图形化向导完成安装，自动注册：
+1. 运行安装程序 `DirLocker_Setup_v2.2.2.exe` 按图形化向导完成安装，自动注册：
    - 文件夹右键菜单「使用 目录密匣 锁定/解锁」（Windows 11 请在右键后点击“显示更多选项”或按 `Shift + 右键`）
    - 无角标蓝白锁标加密目录图标（`.dlock`）与开机后台托盘自启
 2. 首次运行请设置**主密码**。
@@ -25,7 +25,7 @@
 ### 银河麒麟 V10 SP1（Ubuntu 20.04 x64）
 1. 安装 `.deb` 安装包：
    ```bash
-   sudo dpkg -i dirlocker_2.2.1_amd64.deb
+   sudo dpkg -i dirlocker_2.2.2_amd64.deb
    # 若提示缺少依赖，执行：
    sudo apt-get install -f
    ```

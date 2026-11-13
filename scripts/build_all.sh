@@ -27,7 +27,7 @@ mkdir -p "${KYLIN_DIST}/installer"
 
 bash "${ROOT_DIR}/scripts/package_linux_deb.sh" \
     "${ROOT_DIR}/build-linux" \
-    "${KYLIN_DIST}/dirlocker_2.2.1_amd64.deb"
+    "${KYLIN_DIST}/dirlocker_2.2.2_amd64.deb"
 
 cp "${ROOT_DIR}/build-linux/dirlockerd" \
    "${ROOT_DIR}/build-linux/dirlocker" \
@@ -54,11 +54,11 @@ rm -rf "${WIN_DIST}"
 mkdir -p "${WIN_DIST}"
 
 echo "=== [4b] Building Windows NSIS GUI Installer ==="
-makensis -DAPP_VERSION=2.2.1 \
+makensis -DAPP_VERSION=2.2.2 \
     -DSRC_WIN_DIR="${ROOT_DIR}/src/windows" \
     -DBIN_DIR="${ROOT_DIR}/build-win64" \
-    -DOUT_FILE="${WIN_DIST}/DirLocker_Setup_v2.2.1.exe" \
+    -DOUT_FILE="${WIN_DIST}/DirLocker_Setup_v2.2.2.exe" \
     "${ROOT_DIR}/src/windows/installer/dirlocker.nsi"
 
 echo "=== Build Complete ==="
-ls -lh "${KYLIN_DIST}/dirlocker_2.2.1_amd64.deb" "${WIN_DIST}/DirLocker_Setup_v2.2.1.exe"
+ls -lh "${KYLIN_DIST}/dirlocker_2.2.2_amd64.deb" "${WIN_DIST}/DirLocker_Setup_v2.2.2.exe"
