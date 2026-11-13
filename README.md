@@ -29,10 +29,9 @@
 运行安装程序 `DirLocker_Setup_v2.2.1.exe` 按向导安装（默认安装至 `C:\Program Files\DirLocker`，支持右键菜单、开机托盘自启与系统标准卸载）。
 
 > [!IMPORTANT]
-> **关于 Windows 11 “智能应用控制 (Smart App Control / SAC)” 与第三方杀软的说明**：
-> - 微软官方的 **Smart App Control (SAC)** 是 Win11 系统底层基于代码完整性的零信任安全防护，**不支持针对单文件、目录或进程添加白名单/排除项**（任何工具与安装程序均无法通过命令或注册表为其添加豁免）。
-> - 若电脑安装了 **360、火绒等第三方安全软件**，Windows Defender 防病毒会被系统自动关闭，导致防病毒选项中的“排除项”变为不可用；但 **SAC 独立于杀毒软件仍会在系统底层强制拦截未签名或新版本二进制文件**。
-> - 本工具为纯本地开源项目，未购买昂贵的商业代码签名证书。若在开启了 SAC 的 Win11 上运行时被提示阻止，需手动关闭 SAC：打开 **Windows 安全中心 $\rightarrow$ 应用和浏览器控制 $\rightarrow$ 智能应用控制设置 $\rightarrow$ 选择“关闭 (Off)”** 即可。
+> **关于 Windows 11 “智能应用控制 (Smart App Control / SAC)” 的说明**：
+> - 微软的 **Smart App Control (SAC)** 会默认拦截未经商业代码签名证书签名的全新版本程序，且微软官方**不支持为单个应用添加排除项或白名单**。
+> - 若在开启了 SAC 的 Win11 上运行受阻，请直接在系统中将其关闭：打开 **Windows 安全中心 $\rightarrow$ 应用和浏览器控制 $\rightarrow$ 智能应用控制设置 $\rightarrow$ 选择“关闭 (Off)”** 即可正常运行。
 
 ### 银河麒麟 V10 SP1 / Ubuntu 20.04 (x64)
 ```bash
