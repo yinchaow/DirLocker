@@ -98,7 +98,7 @@ private:
     bool require_master_on_open_ = false;
     bool main_window_unlocked_ = false;
     bool main_auth_prompt_open_ = false;
-    QString hotkey_ = QStringLiteral("Ctrl+Alt+L");
+    QString hotkey_ = QStringLiteral("Ctrl+Alt+K");
     std::vector<UiDirRow> rows_;
     std::vector<size_t> visible_indices_;
     bool really_quit_ = false;

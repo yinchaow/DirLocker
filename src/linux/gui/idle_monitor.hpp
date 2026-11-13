@@ -37,7 +37,7 @@ private:
     int auto_relock_minutes_ = 5;
     bool idle_triggered_ = false;
 
-    QString hotkey_str_ = QStringLiteral("Ctrl+Alt+L");
+    QString hotkey_str_ = QStringLiteral("Ctrl+Alt+K");
     bool hotkey_paused_ = false;
     bool hotkey_ok_ = false;
     unsigned int hotkey_keycode_ = 0;

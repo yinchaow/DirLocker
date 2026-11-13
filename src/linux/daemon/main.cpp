@@ -921,7 +921,7 @@ JsonValue serialize_public_state(const StateStore& store) {
     JsonValue st = JsonValue::object();
     st.set("auto_relock_minutes", store.settings().auto_relock_minutes);
     st.set("require_master_on_open", store.settings().require_master_on_open);
-    st.set("hotkey", HotkeySpec::normalize(store.settings().hotkey, "Ctrl+Alt+L"));
+    st.set("hotkey", HotkeySpec::normalize(store.settings().hotkey, "Ctrl+Alt+K"));
     data.set("settings", std::move(st));
 
     JsonValue arr = JsonValue::array();
@@ -1043,7 +1043,7 @@ std::string handle_request_json(const JsonValue& req, uint32_t caller_uid) {
         if (mins < 0) mins = 0;
         if (mins > 1440) mins = 1440;
 
-        std::string raw_hk = req.get("hotkey").as_string_or("Ctrl+Alt+L");
+        std::string raw_hk = req.get("hotkey").as_string_or("Ctrl+Alt+K");
         HotkeySpec hk_spec;
         std::string hk_err;
         if (!HotkeySpec::parse(raw_hk, hk_spec, &hk_err)) {

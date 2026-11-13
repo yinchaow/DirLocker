@@ -8,6 +8,10 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# 安装或更新前退出可能正在运行的旧版桌面程序，避免覆盖后旧版常驻内存
+dirlocker --quit-silent 2>/dev/null || true
+pkill -x dirlocker 2>/dev/null || true
+
 install -Dm755 "${SCRIPT_DIR}/dirlockerd" /usr/sbin/dirlockerd
 install -Dm755 "${SCRIPT_DIR}/dirlocker" /usr/bin/dirlocker
 install -Dm644 "${SCRIPT_DIR}/libdirlocker-peony-plugin.so" /usr/lib/peony-qt-extensions/libdirlocker-peony-plugin.so

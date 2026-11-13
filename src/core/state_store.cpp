@@ -251,8 +251,11 @@ bool parse_state_json(const std::string& content,
         st_out.auto_relock_minutes = relock_min;
         st_out.require_master_on_open = st.get("require_master_on_open").as_bool(false);
         st_out.allow_in_place_fallback = st.get("allow_in_place_fallback").as_bool(false);
-        std::string hk = st.get("hotkey").as_string_or("Ctrl+Alt+L");
-        st_out.hotkey = HotkeySpec::normalize(hk, "Ctrl+Alt+L");
+        std::string hk = st.get("hotkey").as_string_or("Ctrl+Alt+K");
+        if (hk == "Ctrl+Alt+L") {
+            hk = "Ctrl+Alt+K";
+        }
+        st_out.hotkey = HotkeySpec::normalize(hk, "Ctrl+Alt+K");
     }
 
     std::vector<DirEntry> parsed_entries;
@@ -336,7 +339,7 @@ bool StateStore::save(std::string* err) const {
     st.set("auto_relock_minutes", settings_.auto_relock_minutes);
     st.set("require_master_on_open", settings_.require_master_on_open);
     st.set("allow_in_place_fallback", settings_.allow_in_place_fallback);
-    st.set("hotkey", HotkeySpec::normalize(settings_.hotkey, "Ctrl+Alt+L"));
+    st.set("hotkey", HotkeySpec::normalize(settings_.hotkey, "Ctrl+Alt+K"));
     root.set("settings", std::move(st));
 
     JsonValue arr = JsonValue::array();

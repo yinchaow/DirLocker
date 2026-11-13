@@ -622,7 +622,7 @@ public:
                                 auto* nml = reinterpret_cast<NMLINK*>(lp);
                                 const wchar_t* url = (nml && nml->item.szUrl[0])
                                     ? nml->item.szUrl
-                                    : L"https://github.com/yinchaow/dirlocker";
+                                    : L"https://github.com/yinchaow/DirLocker";
                                 ShellExecuteW(self->hwnd, L"open", url, nullptr, nullptr, SW_SHOWNORMAL);
                                 return 0;
                             }
@@ -1366,7 +1366,7 @@ bool win_show_settings_dialog(
     const int dlg_w = 506;
     if (!dlg.create(parent, L"安全与自动回锁设置", dlg_w, 340)) return false;
 
-    std::string chosen_hk = HotkeySpec::normalize(data.hotkey, "Ctrl+Alt+L");
+    std::string chosen_hk = HotkeySpec::normalize(data.hotkey, "Ctrl+Alt+K");
 
     dlg.add_label(L"无操作自动回锁（分钟，0 表示关闭）：", 16, 18, 280, 20);
     HWND min_edit = dlg.add_edit(308, 14, 180, 24, 5001, false, true);
@@ -1471,7 +1471,7 @@ bool win_show_settings_dialog(
 
     dlg.on_command = [&](int id) {
         if (id == 5005) {
-            update_hk_ui("Ctrl+Alt+L");
+            update_hk_ui("Ctrl+Alt+K");
         }
     };
 
@@ -1822,7 +1822,7 @@ void win_show_about_dialog(HWND parent, const std::string& current_hotkey) {
     ModalDialogBase dlg;
     const int dlg_w = 556;
     if (!dlg.create(parent, L"关于 目录密匣", dlg_w, 430)) return;
-    const std::wstring whk = utf8_to_wide(HotkeySpec::normalize(current_hotkey, "Ctrl+Alt+L"));
+    const std::wstring whk = utf8_to_wide(HotkeySpec::normalize(current_hotkey, "Ctrl+Alt+K"));
 
     dlg.add_app_icon(20, 18, 48);
     int title_w = dlg.measure_text_logical_w(L"目录密匣", dlg.title_font);
@@ -1848,10 +1848,10 @@ void win_show_about_dialog(HWND parent, const std::string& current_hotkey) {
 
     dlg.add_styled_label(L"项目主页：", 20, 154, 74, 20, kColorMuted, false);
     HWND link = dlg.add_syslink(
-        L"<a href=\"https://github.com/yinchaow/dirlocker\">https://github.com/yinchaow/dirlocker</a>",
+        L"<a href=\"https://github.com/yinchaow/DirLocker\">https://github.com/yinchaow/DirLocker</a>",
         96, 154, 420, 20, 7001);
     if (!link) {
-        dlg.add_styled_label(L"https://github.com/yinchaow/dirlocker", 96, 154, 420, 20, kColorAccent, false);
+        dlg.add_styled_label(L"https://github.com/yinchaow/DirLocker", 96, 154, 420, 20, kColorAccent, false);
     }
 
     const COLORREF kCardBg = RGB(246, 248, 250);

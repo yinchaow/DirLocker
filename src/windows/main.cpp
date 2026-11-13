@@ -112,7 +112,7 @@ struct WinApp {
 
     bool tray_added = false;
     bool hotkey_ok = false;
-    std::string registered_hotkey = "Ctrl+Alt+L";
+    std::string registered_hotkey = "Ctrl+Alt+K";
     bool idle_triggered = false;
     int upgrade_tick_counter = 0;
     bool main_window_unlocked = false;
@@ -313,7 +313,7 @@ void rebuild_list_view(WinApp& app) {
         std::wstring whk = utf8_to_wide(
             HotkeySpec::normalize(app.registered_hotkey.empty() ? app.store->settings().hotkey
                                                                 : app.registered_hotkey,
-                                  "Ctrl+Alt+L"));
+                                  "Ctrl+Alt+K"));
         std::wstring hk = app.hotkey_ok ? (L"热键 " + whk + L" 已就绪")
                                         : (L"托盘保护运行中（" + whk + L" 未注册）");
         std::wstring idle = mins > 0
@@ -333,7 +333,7 @@ void apply_windows_hotkey(WinApp& app, const std::string& raw_hotkey) {
         UnregisterHotKey(app.hwnd, kHotkeyId);
         app.hotkey_ok = false;
     }
-    std::string hk = HotkeySpec::normalize(raw_hotkey, "Ctrl+Alt+L");
+    std::string hk = HotkeySpec::normalize(raw_hotkey, "Ctrl+Alt+K");
     app.registered_hotkey = hk;
     UINT mods = 0, vk = 0;
     if (win_hotkey_to_native(hk, mods, vk)) {
@@ -1016,7 +1016,7 @@ void do_settings(WinApp& app) {
     data.auto_relock_minutes = app.store->settings().auto_relock_minutes;
     data.require_master_on_open = app.store->settings().require_master_on_open;
     data.allow_in_place_fallback = app.store->settings().allow_in_place_fallback;
-    data.hotkey = HotkeySpec::normalize(app.store->settings().hotkey, "Ctrl+Alt+L");
+    data.hotkey = HotkeySpec::normalize(app.store->settings().hotkey, "Ctrl+Alt+K");
 
     if (app.hotkey_ok) {
         UnregisterHotKey(app.hwnd, kHotkeyId);
@@ -1052,7 +1052,7 @@ void do_settings(WinApp& app) {
     app.store->settings_mut().auto_relock_minutes = data.auto_relock_minutes;
     app.store->settings_mut().require_master_on_open = data.require_master_on_open;
     app.store->settings_mut().allow_in_place_fallback = data.allow_in_place_fallback;
-    app.store->settings_mut().hotkey = HotkeySpec::normalize(data.hotkey, "Ctrl+Alt+L");
+    app.store->settings_mut().hotkey = HotkeySpec::normalize(data.hotkey, "Ctrl+Alt+K");
     app.idle_triggered = false;
     std::string err;
     app.store->save(&err);
@@ -2180,7 +2180,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             };
 
             mk_btn(L"＋ 添加并锁定", IDC_BTN_ADD);
-            mk_btn(L"一键全锁 (Ctrl+Alt+L)", IDC_BTN_LOCK_ALL);
+            mk_btn(L"一键全锁 (Ctrl+Alt+K)", IDC_BTN_LOCK_ALL);
             app->search_edit = CreateWindowExW(
                 0, L"EDIT", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,

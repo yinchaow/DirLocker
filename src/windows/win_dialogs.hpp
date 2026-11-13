@@ -16,7 +16,7 @@ struct WinSettingsData {
     int auto_relock_minutes = 5;
     bool require_master_on_open = false;
     bool allow_in_place_fallback = false;
-    std::string hotkey = "Ctrl+Alt+L";
+    std::string hotkey = "Ctrl+Alt+K";
     std::string master_pw;
 };
 

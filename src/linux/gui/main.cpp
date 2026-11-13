@@ -41,6 +41,8 @@ void parseArgs(const QStringList& args, QString& action, QString& path, bool& tr
             path = args[++i];
         } else if (a == "--lock-all") {
             action = QStringLiteral("lock-all");
+        } else if (a == "--quit-silent" || a == "--quit") {
+            action = QStringLiteral("quit-silent");
         } else if (a == "--show") {
             action = QStringLiteral("show");
         }

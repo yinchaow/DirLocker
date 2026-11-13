@@ -550,7 +550,7 @@ SettingsDialog::SettingsDialog(int autoRelockMinutes, bool requireMasterOnOpen,
                                std::function<bool(const QString&, QString&)> probeHotkey,
                                QWidget* parent)
     : QDialog(parent),
-      chosen_hotkey_(QString::fromStdString(HotkeySpec::normalize(hotkey.toStdString(), "Ctrl+Alt+L"))),
+      chosen_hotkey_(QString::fromStdString(HotkeySpec::normalize(hotkey.toStdString(), "Ctrl+Alt+K"))),
       probe_hotkey_(std::move(probeHotkey)) {
     setWindowTitle(QStringLiteral("安全与自动回锁设置"));
     setMinimumWidth(490);
@@ -578,7 +578,7 @@ SettingsDialog::SettingsDialog(int autoRelockMinutes, bool requireMasterOnOpen,
     hotkey_edit_->installEventFilter(this);
     auto* resetHkBtn = new QPushButton(QStringLiteral("恢复默认"), this);
     connect(resetHkBtn, &QPushButton::clicked, this, [this]() {
-        applyHotkeyCandidate(QStringLiteral("Ctrl+Alt+L"));
+        applyHotkeyCandidate(QStringLiteral("Ctrl+Alt+K"));
     });
     hkRow->addWidget(hotkey_edit_, 1);
     hkRow->addWidget(resetHkBtn);

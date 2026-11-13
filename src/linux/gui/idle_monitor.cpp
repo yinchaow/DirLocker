@@ -142,7 +142,7 @@ void IdleAndHotkeyMonitor::updatePolicy(int autoRelockMinutes) {
 }
 
 bool IdleAndHotkeyMonitor::setHotkey(const QString& hotkey) {
-    QString norm = QString::fromStdString(HotkeySpec::normalize(hotkey.toStdString(), "Ctrl+Alt+L"));
+    QString norm = QString::fromStdString(HotkeySpec::normalize(hotkey.toStdString(), "Ctrl+Alt+K"));
     hotkey_str_ = norm;
     unregisterX11Hotkey();
     if (!hotkey_paused_) {

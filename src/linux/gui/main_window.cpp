@@ -601,7 +601,7 @@ void MainWindow::setupUi() {
 
     auto* addBtn = new QPushButton(QStringLiteral("＋ 添加并锁定"), this);
     addBtn->setObjectName(QStringLiteral("primaryBtn"));
-    lock_all_btn_ = new QPushButton(QStringLiteral("一键全锁 (Ctrl+Alt+L)"), this);
+    lock_all_btn_ = new QPushButton(QStringLiteral("一键全锁 (Ctrl+Alt+K)"), this);
     lock_all_btn_->setObjectName(QStringLiteral("tonalAccentBtn"));
     search_edit_ = new QLineEdit(this);
     search_edit_->setObjectName(QStringLiteral("searchBox"));
@@ -708,7 +708,7 @@ void MainWindow::setupTray() {
 
     auto* menu = new QMenu(this);
     auto* openAct = menu->addAction(QStringLiteral("打开主界面"));
-    tray_lock_all_act_ = menu->addAction(QStringLiteral("一键全部锁定 (Ctrl+Alt+L)"));
+    tray_lock_all_act_ = menu->addAction(QStringLiteral("一键全部锁定 (Ctrl+Alt+K)"));
     menu->addSeparator();
     auto* settingsAct = menu->addAction(QStringLiteral("安全设置与快捷键..."));
     auto* healthAct = menu->addAction(QStringLiteral("保护区体检与修复..."));
@@ -895,13 +895,16 @@ void MainWindow::refreshState() {
     if (st.is_object()) {
         auto_relock_minutes_ = static_cast<int>(st.get("auto_relock_minutes").as_int(5));
         require_master_on_open_ = st.get("require_master_on_open").as_bool(false);
-        const std::string rawHk = st.get("hotkey").as_string_or("Ctrl+Alt+L");
+        std::string rawHk = st.get("hotkey").as_string_or("Ctrl+Alt+K");
+        if (rawHk == "Ctrl+Alt+L") {
+            rawHk = "Ctrl+Alt+K";
+        }
         HotkeySpec hkSpec;
         std::string normHk;
         if (HotkeySpec::parse(rawHk, hkSpec, &normHk)) {
             hotkey_ = QString::fromStdString(normHk);
         } else {
-            hotkey_ = QStringLiteral("Ctrl+Alt+L");
+            hotkey_ = QStringLiteral("Ctrl+Alt+K");
         }
     }
     if (!require_master_on_open_) {
@@ -1177,6 +1180,12 @@ bool MainWindow::unlockPathFlow(const QString& path, bool useCustomPassword) {
 }
 
 void MainWindow::handleExternalCommand(const QString& action, const QString& path) {
+    if (action == "quit-silent" || action == "quit") {
+        really_quit_ = true;
+        close();
+        QApplication::quit();
+        return;
+    }
     refreshState();
     if (action == "show") {
         showMainWindow();
@@ -1717,7 +1726,7 @@ void MainWindow::onShowAbout() {
             "<span style=\"color:#5f6368;\">开源协议：</span><span style=\"color:#1f2328;\">MIT License</span><br/>"
             "<span style=\"color:#5f6368;\">项目主页：</span>"
             "<a style=\"color:#0d47a1; text-decoration:none; font-weight:500;\" "
-            "href=\"https://github.com/yinchaow/dirlocker\">https://github.com/yinchaow/dirlocker</a>"
+            "href=\"https://github.com/yinchaow/DirLocker\">https://github.com/yinchaow/DirLocker</a>"
             "</div>"),
         &dlg);
     metaLabel->setTextFormat(Qt::RichText);
@@ -1744,7 +1753,7 @@ void MainWindow::onShowAbout() {
             "<span style=\"color:#0d47a1;\">•</span> <b>双重密码体系</b>：支持统一主密码与单目录独立密码，随时自由切换与改密<br/>"
             "<span style=\"color:#0d47a1;\">•</span> <b>快捷验证解锁</b>：已加密目录独立标识，双击即可输入密码解锁进入<br/>"
             "<span style=\"color:#0d47a1;\">•</span> <b>批量拖拽加锁</b>：支持将单个或多个目录直接拖入窗口批量锁定<br/>"
-            "<span style=\"color:#0d47a1;\">•</span> <b>全锁与防占用</b>：支持 <span style=\"font-family:monospace; background-color:#e2e8f0; color:#0c4a6e;\">&nbsp;%1&nbsp;</span> 一键全锁与闲置自动回锁，程序占用目录时自动跳过并提示<br/>"
+            "<span style=\"color:#0d47a1;\">•</span> <b>全锁与防占用</b>：支持 <b style=\"color:#0d47a1;\">[%1]</b> 一键全锁与闲置自动回锁，程序占用目录时自动跳过并提示<br/>"
             "<span style=\"color:#0d47a1;\">•</span> <b>主界保护与防爆破</b>：可选打开主窗口验证主密码，连续输错密码触发退避冷却时间<br/>"
             "<span style=\"color:#0d47a1;\">•</span> <b>无损与体检修复</b>：零文件内容改动，内置保护区健康体检与安全无损一键修复"
             "</div>").arg(hotkey_.toHtmlEscaped()),

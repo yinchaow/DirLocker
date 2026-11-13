@@ -55,7 +55,7 @@ install -Dm644 "${ICON_SRC}/mimetypes/128x128/dirlocker-folder.png" \
 
 cat > "${PKG_ROOT}/DEBIAN/control" <<'EOF'
 Package: dirlocker
-Version: 2.2.0
+Version: 2.2.1
 Section: utils
 Priority: optional
 Architecture: amd64
@@ -65,6 +65,15 @@ Description: DirLocker lightweight password lock for directories
  Protects directories on Kylin V10 SP1 / Ubuntu 20.04 with global master
  password or per-directory custom password, Peony context menu, custom hotkey
  lock, idle auto-relock, occupancy protection, and vault health repair.
+EOF
+
+cat > "${PKG_ROOT}/DEBIAN/preinst" <<'EOF'
+#!/bin/sh
+set -e
+# 安装或升级前，退出可能在用户桌面运行的旧版 GUI，避免覆盖后旧版常驻内存
+dirlocker --quit-silent 2>/dev/null || true
+pkill -x dirlocker 2>/dev/null || true
+exit 0
 EOF
 
 cat > "${PKG_ROOT}/DEBIAN/postinst" <<'EOF'
@@ -128,7 +137,7 @@ fi
 exit 0
 EOF
 
-chmod 755 "${PKG_ROOT}/DEBIAN/postinst" "${PKG_ROOT}/DEBIAN/prerm" "${PKG_ROOT}/DEBIAN/postrm"
+chmod 755 "${PKG_ROOT}/DEBIAN/preinst" "${PKG_ROOT}/DEBIAN/postinst" "${PKG_ROOT}/DEBIAN/prerm" "${PKG_ROOT}/DEBIAN/postrm"
 mkdir -p "$(dirname "${OUT_DEB}")"
 dpkg-deb --build --root-owner-group "${PKG_ROOT}" "${OUT_DEB}"
 echo "Built DEB package: ${OUT_DEB}"

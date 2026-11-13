@@ -17,7 +17,7 @@ struct HotkeySpec {
 
     static bool parse(const std::string& raw, HotkeySpec& out, std::string* err = nullptr);
     static std::string normalize(const std::string& raw,
-                                 const std::string& fallback = "Ctrl+Alt+L");
+                                 const std::string& fallback = "Ctrl+Alt+K");
 };
 
 // Non-destructive, time-only brute-force cooldown guard for password prompts.

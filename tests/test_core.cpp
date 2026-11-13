@@ -266,7 +266,7 @@ void test_hotkey_and_auth_throttle() {
     CHECK(spec.to_string() == "Ctrl+Alt+Shift+F9");
     CHECK(HotkeySpec::parse("Ctrl+0", spec, &err));
     CHECK(spec.to_string() == "Ctrl+0");
-    CHECK(HotkeySpec::normalize("invalid", "Ctrl+Alt+L") == "Ctrl+Alt+L");
+    CHECK(HotkeySpec::normalize("invalid", "Ctrl+Alt+K") == "Ctrl+Alt+K");
 
     CHECK(!HotkeySpec::parse("", spec, &err));
     CHECK(!HotkeySpec::parse("L", spec, &err));

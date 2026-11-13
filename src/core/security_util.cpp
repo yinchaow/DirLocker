@@ -133,7 +133,7 @@ std::string HotkeySpec::normalize(const std::string& raw, const std::string& fal
     if (parse(fallback, fb)) {
         return fb.to_string();
     }
-    return "Ctrl+Alt+L";
+    return "Ctrl+Alt+K";
 }
 
 int64_t AuthThrottle::steady_now_ms() {
