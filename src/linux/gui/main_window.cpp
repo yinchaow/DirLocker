@@ -19,6 +19,7 @@
 #include <QHeaderView>
 #include <QHelpEvent>
 #include <QIcon>
+#include <QLinearGradient>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
@@ -27,7 +28,10 @@
 #include <QPainterPath>
 #include <QPixmap>
 #include <QPolygonF>
+#include <QProcess>
 #include <QPushButton>
+#include <QRadialGradient>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyledItemDelegate>
 #include <QTextBrowser>
@@ -44,7 +48,7 @@ namespace {
 constexpr int kRolePath = Qt::UserRole + 1;
 constexpr int kRoleLocked = Qt::UserRole + 2;
 constexpr int kRoleCustom = Qt::UserRole + 3;
-constexpr int kCornerRadius = 6;
+constexpr int kCornerRadius = 8;
 
 struct RowCellLayout {
     QRect statusChip;  // col 1: 28x28
@@ -95,9 +99,9 @@ int hitCellSlot(const QRect& rect, int col, bool locked, const QPoint& pos) {
 }
 
 void drawStatusLockChip(QPainter* painter, const QRect& rc, bool locked) {
-    const QColor bg = locked ? QColor(227, 242, 253) : QColor(232, 245, 233);
-    const QColor border = locked ? QColor(144, 202, 249) : QColor(165, 214, 167);
-    const QColor fg = locked ? QColor(13, 71, 161) : QColor(27, 94, 32);
+    const QColor bg = locked ? QColor(232, 243, 252) : QColor(230, 246, 236);
+    const QColor border = locked ? QColor(147, 197, 253) : QColor(163, 222, 192);
+    const QColor fg = locked ? QColor(0, 103, 192) : QColor(15, 123, 67);
 
     painter->setBrush(bg);
     painter->setPen(QPen(border, 1.0));
@@ -275,6 +279,57 @@ QIcon makeMenuIcon(MenuIconKind kind) {
     return icon;
 }
 
+QPixmap renderSearchIconPixmap(int px) {
+    QPixmap pm(px, px);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const qreal s = static_cast<qreal>(px) / 16.0;
+    QPen pen(QColor(148, 163, 184), 1.6 * s, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QRectF(2.5 * s, 2.5 * s, 8.2 * s, 8.2 * s));
+    p.drawLine(QPointF(9.6 * s, 9.6 * s), QPointF(13.6 * s, 13.6 * s));
+    return pm;
+}
+
+// Windows 11 Fluent Mica luminous pearlescent backdrop (matching DocPurger)
+class MicaCanvasWidget : public QWidget {
+public:
+    explicit MicaCanvasWidget(QWidget* parent = nullptr) : QWidget(parent) {}
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const QRect r = rect();
+        p.fillRect(r, QColor(238, 243, 250));  // #EEF3FA
+
+        const qreal w = qMax(1.0, static_cast<qreal>(r.width()));
+        const qreal h = qMax(1.0, static_cast<qreal>(r.height()));
+
+        QRadialGradient g1(QPointF(w * 0.06, h * 0.05), qMax(w, h) * 0.65);
+        g1.setColorAt(0.0, QColor(186, 222, 255, 145));
+        g1.setColorAt(1.0, QColor(186, 222, 255, 0));
+        p.fillRect(r, g1);
+
+        QRadialGradient g2(QPointF(w * 0.94, h * 0.08), qMax(w, h) * 0.56);
+        g2.setColorAt(0.0, QColor(212, 206, 255, 105));
+        g2.setColorAt(1.0, QColor(212, 206, 255, 0));
+        p.fillRect(r, g2);
+
+        QRadialGradient g3(QPointF(w * 0.50, h * 0.98), qMax(w, h) * 0.58);
+        g3.setColorAt(0.0, QColor(196, 224, 255, 115));
+        g3.setColorAt(1.0, QColor(196, 224, 255, 0));
+        p.fillRect(r, g3);
+
+        QLinearGradient gl(0, 0, 0, h);
+        gl.setColorAt(0.0, QColor(255, 255, 255, 76));
+        gl.setColorAt(1.0, QColor(235, 242, 252, 55));
+        p.fillRect(r, gl);
+    }
+};
+
 }  // namespace
 
 class EmptyTableOverlay : public QWidget {
@@ -300,21 +355,21 @@ protected:
         if (bw < 220 || bh < 120) return;
 
         const QRect box((width() - bw) / 2, (height() - bh) / 2, bw, bh);
-        p.setBrush(QColor(248, 250, 252));
-        p.setPen(QPen(QColor(203, 213, 225), 1.2, Qt::DashLine));
-        p.drawRoundedRect(box, 10, 10);
+        p.setBrush(QColor(246, 250, 255, 220));
+        p.setPen(QPen(QColor(196, 212, 232), 1.2, Qt::DashLine));
+        p.drawRoundedRect(box, 14, 14);
 
         const int cx = box.center().x();
         const int iconCy = box.top() + 50;
 
-        // Soft circular blue badge with crisp folder-lock vector
+        // Soft circular Fluent blue badge with crisp folder-lock vector
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor(235, 243, 254));
-        p.drawEllipse(QPoint(cx, iconCy), 24, 24);
+        p.setBrush(QColor(232, 243, 252));
+        p.drawEllipse(QPoint(cx, iconCy), 25, 25);
 
-        QPen fpen(QColor(13, 71, 161), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        QPen fpen(QColor(0, 103, 192), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
         p.setPen(fpen);
-        p.setBrush(QColor(219, 234, 254));
+        p.setBrush(QColor(214, 234, 252));
         QPainterPath folder;
         folder.moveTo(cx - 12, iconCy - 8);
         folder.lineTo(cx - 4, iconCy - 8);
@@ -326,10 +381,10 @@ protected:
         p.drawPath(folder);
 
         // Mini padlock badge in center
-        p.setBrush(QColor(13, 71, 161));
+        p.setBrush(QColor(0, 103, 192));
         p.setPen(Qt::NoPen);
         p.drawRoundedRect(QRectF(cx - 4.0, iconCy + 0.5, 8.0, 6.0), 1.5, 1.5);
-        p.setPen(QPen(QColor(13, 71, 161), 1.4));
+        p.setPen(QPen(QColor(0, 103, 192), 1.4));
         p.setBrush(Qt::NoBrush);
         p.drawArc(QRectF(cx - 2.6, iconCy - 3.2, 5.2, 5.2), 0, 180 * 16);
 
@@ -337,7 +392,7 @@ protected:
         tf.setPointSize(11);
         tf.setBold(true);
         p.setFont(tf);
-        p.setPen(QColor(31, 35, 40));
+        p.setPen(QColor(15, 23, 42));
         const QString title = filtered_empty_
             ? QStringLiteral("未找到匹配的受管目录")
             : QStringLiteral("将要保护的目录拖放到此处");
@@ -347,10 +402,10 @@ protected:
         QFont sf = font();
         sf.setPointSize(9);
         p.setFont(sf);
-        p.setPen(QColor(95, 99, 104));
+        p.setPen(QColor(100, 116, 139));
         const QString sub = filtered_empty_
-            ? QStringLiteral("尝试修改或清空上方搜索栏关键字")
-            : QStringLiteral("或点击左上角「+ 添加并锁定」 · 原目录内文件绝不被修改或加密");
+            ? QStringLiteral("尝试修改或清空上方搜索框关键字")
+            : QStringLiteral("或点击左上角「＋ 添加并锁定」 · 原目录内文件绝不被修改或加密");
         p.drawText(QRect(box.left() + 16, iconCy + 64, box.width() - 32, 42),
                    Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, sub);
     }
@@ -386,20 +441,21 @@ public:
         const bool rowHovered = option.state.testFlag(QStyle::State_MouseOver);
 
         if (selected) {
-            painter->fillRect(rect, QColor(235, 243, 254));  // #EBF3FE
+            painter->fillRect(rect, QColor(233, 243, 252));  // Fluent #E9F3FC
         } else if (rowHovered) {
-            painter->fillRect(rect, QColor(246, 248, 250));  // #F6F8FA
+            painter->fillRect(rect, QColor(244, 248, 254));  // Fluent hover #F4F8FE
         } else {
             painter->fillRect(rect, Qt::white);
         }
 
         // Subtle horizontal bottom hairline
-        painter->setPen(QColor(238, 241, 244));
+        painter->setPen(QColor(236, 241, 247));
         painter->drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom());
 
         if (selected && index.column() == 0) {
-            painter->fillRect(QRect(rect.left(), rect.top() + 4, 3, rect.height() - 8),
-                              QColor(13, 71, 161));  // #0D47A1
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(0, 103, 192));  // Fluent #0067C0 3px rounded pill
+            painter->drawRoundedRect(QRectF(rect.left() + 2.0, rect.top() + 8.0, 3.0, rect.height() - 16.0), 1.5, 1.5);
         }
 
         const QString path = index.data(kRolePath).toString();
@@ -479,14 +535,14 @@ public:
             QColor bg, border, fg;
             if (locked) {
                 text = QStringLiteral("解锁");
-                bg = hov1 ? QColor(220, 242, 223) : QColor(232, 245, 233);
-                border = hov1 ? QColor(46, 125, 50) : QColor(129, 199, 132);
-                fg = QColor(27, 94, 32);
+                bg = hov1 ? QColor(214, 242, 225) : QColor(230, 246, 236);
+                border = hov1 ? QColor(15, 123, 67) : QColor(134, 214, 174);
+                fg = QColor(15, 123, 67);
             } else {
                 text = QStringLiteral("锁定");
-                bg = hov1 ? QColor(220, 235, 250) : QColor(235, 243, 254);
-                border = hov1 ? QColor(25, 118, 210) : QColor(144, 202, 249);
-                fg = QColor(13, 71, 161);
+                bg = hov1 ? QColor(214, 233, 252) : QColor(232, 243, 252);
+                border = hov1 ? QColor(0, 103, 192) : QColor(147, 197, 253);
+                fg = QColor(0, 103, 192);
             }
             painter->setBrush(bg);
             painter->setPen(QPen(border, 1.0));
@@ -522,8 +578,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle(QStringLiteral("目录密匣 v" DIRLOCKER_VERSION_STR));
     setWindowIcon(createAppIcon(true));
     setAcceptDrops(true);
-    resize(920, 560);
-    setMinimumSize(760, 440);
+    resize(940, 580);
+    setMinimumSize(760, 450);
 
     setupUi();
     setupTray();
@@ -565,52 +621,71 @@ QIcon MainWindow::createAppIcon(bool lockedTint) const {
 }
 
 void MainWindow::setupUi() {
-    auto* central = new QWidget(this);
+    auto* central = new MicaCanvasWidget(this);
     central->setObjectName(QStringLiteral("centralCanvas"));
     central->setStyleSheet(QStringLiteral(
-        "#centralCanvas { background: #f6f8fa; }"
-        "QPushButton { background: #ffffff; border: 1px solid #d0d7de; border-radius: 6px; "
-        "  color: #1f2328; padding: 6px 12px; }"
-        "QPushButton:hover { background: #f3f4f6; border-color: #afb8c1; }"
-        "QPushButton:pressed { background: #ebecf0; }"
-        "QPushButton:disabled { background: #f6f8fa; color: #9aa0a6; border-color: #e1e4e8; }"
-        "QPushButton#primaryBtn { background: #0d47a1; border: 1px solid #0d47a1; "
-        "  color: #ffffff; font-weight: 600; padding: 6px 15px; }"
-        "QPushButton#primaryBtn:hover { background: #1565c0; border-color: #1565c0; }"
-        "QPushButton#primaryBtn:pressed { background: #09357a; border-color: #09357a; }"
-        "QPushButton#tonalAccentBtn { background: #ebf3fe; border: 1px solid #90caf9; "
-        "  color: #0d47a1; font-weight: 600; padding: 6px 13px; }"
-        "QPushButton#tonalAccentBtn:hover { background: #dcebfa; border-color: #1976d2; }"
-        "QPushButton#tonalAccentBtn:pressed { background: #cbe2fb; border-color: #0d47a1; }"
-        "QLineEdit#searchBox { background: #ffffff; border: 1px solid #d0d7de; border-radius: 6px; "
-        "  padding: 5px 10px; color: #1f2328; }"
-        "QLineEdit#searchBox:focus { border: 1px solid #0d47a1; }"
-        "QFrame#tableCard { background: #ffffff; border: 1px solid #d8dee4; border-radius: 6px; }"
-        "QTableWidget { background: #ffffff; border: none; outline: none; }"
-        "QHeaderView::section { background: #f8fafc; color: #5f6368; font-weight: 600; "
-        "  border: none; border-bottom: 1px solid #d8dee4; padding: 8px 12px; }"
+        "QFrame#commandBar { background: rgba(255, 255, 255, 232); border: 1px solid rgba(15, 23, 42, 22); "
+        "  border-radius: 12px; }"
+        "QFrame#searchWrap { background: #f4f7fb; border: 1px solid #d8e1ec; border-radius: 8px; }"
+        "QFrame#tableCard { background: rgba(255, 255, 255, 224); border: 1px solid rgba(15, 23, 42, 22); "
+        "  border-radius: 14px; }"
+        "QPushButton { background: rgba(255, 255, 255, 225); border: 1px solid #d4dde8; "
+        "  border-radius: 8px; color: #1e293b; padding: 6px 13px; }"
+        "QPushButton:hover { background: #ffffff; border-color: rgba(0, 103, 192, 110); color: #0067c0; }"
+        "QPushButton:pressed { background: #eef5fc; }"
+        "QPushButton:disabled { background: rgba(248, 250, 252, 180); color: #94a3b8; border-color: #e2e8f0; }"
+        "QPushButton#primaryBtn { background: #0067c0; border: 1px solid #005fb8; "
+        "  color: #ffffff; font-weight: 600; padding: 6px 15px; border-radius: 8px; }"
+        "QPushButton#primaryBtn:hover { background: #005fb8; border-color: #00529e; color: #ffffff; }"
+        "QPushButton#primaryBtn:pressed { background: #00529e; color: #ffffff; }"
+        "QPushButton#tonalAccentBtn { background: #e8f3fc; border: 1px solid #93c5fd; "
+        "  color: #0067c0; font-weight: 600; padding: 6px 14px; border-radius: 8px; }"
+        "QPushButton#tonalAccentBtn:hover { background: #d8ebfb; border-color: #0067c0; color: #00529e; }"
+        "QPushButton#tonalAccentBtn:pressed { background: #c5e1fa; }"
+        "QLineEdit#searchBox { background: transparent; border: none; padding: 3px 2px; color: #0f172a; }"
+        "QTableWidget { background: #ffffff; border: none; outline: none; border-bottom-left-radius: 12px; "
+        "  border-bottom-right-radius: 12px; }"
+        "QHeaderView::section { background: #f4f7fb; color: #64748b; font-weight: 600; font-size: 9pt; "
+        "  border: none; border-bottom: 1px solid #e2e8f0; padding: 8px 12px; }"
     ));
 
     auto* root = new QVBoxLayout(central);
-    root->setContentsMargins(14, 12, 14, 10);
+    root->setContentsMargins(14, 14, 14, 10);
     root->setSpacing(10);
 
-    // 1. Focused Top Header Bar (Primary + Tonal LockAll + Live Search | Settings menu + Help menu)
-    auto* topBar = new QHBoxLayout();
-    topBar->setSpacing(8);
+    // 1. Elevated Fluent Command Bar (Add + LockAll + Search | Settings + Help)
+    auto* cmdBar = new QFrame(central);
+    cmdBar->setObjectName(QStringLiteral("commandBar"));
+    auto* cmdLay = new QHBoxLayout(cmdBar);
+    cmdLay->setContentsMargins(10, 7, 10, 7);
+    cmdLay->setSpacing(8);
 
-    auto* addBtn = new QPushButton(QStringLiteral("＋ 添加并锁定"), this);
+    auto* addBtn = new QPushButton(QStringLiteral("＋ 添加并锁定"), cmdBar);
     addBtn->setObjectName(QStringLiteral("primaryBtn"));
-    lock_all_btn_ = new QPushButton(QStringLiteral("一键全锁 (Ctrl+Alt+K)"), this);
+    addBtn->setCursor(Qt::PointingHandCursor);
+    lock_all_btn_ = new QPushButton(QStringLiteral("一键全锁 (Ctrl+Alt+K)"), cmdBar);
     lock_all_btn_->setObjectName(QStringLiteral("tonalAccentBtn"));
-    search_edit_ = new QLineEdit(this);
-    search_edit_->setObjectName(QStringLiteral("searchBox"));
-    search_edit_->setPlaceholderText(QStringLiteral("搜索目录名称或路径..."));
-    search_edit_->setClearButtonEnabled(true);
-    search_edit_->setMinimumWidth(210);
-    search_edit_->setMaximumWidth(280);
+    lock_all_btn_->setCursor(Qt::PointingHandCursor);
 
-    auto* settingsBtn = new QPushButton(QStringLiteral("设置"), this);
+    auto* searchWrap = new QFrame(cmdBar);
+    searchWrap->setObjectName(QStringLiteral("searchWrap"));
+    searchWrap->setMinimumWidth(200);
+    searchWrap->setMaximumWidth(280);
+    auto* swLay = new QHBoxLayout(searchWrap);
+    swLay->setContentsMargins(9, 2, 6, 2);
+    swLay->setSpacing(6);
+    auto* searchIconLbl = new QLabel(searchWrap);
+    searchIconLbl->setPixmap(renderSearchIconPixmap(15));
+    searchIconLbl->setFixedSize(15, 15);
+    search_edit_ = new QLineEdit(searchWrap);
+    search_edit_->setObjectName(QStringLiteral("searchBox"));
+    search_edit_->setPlaceholderText(QStringLiteral("搜索目录名称或路径…"));
+    search_edit_->setClearButtonEnabled(true);
+    swLay->addWidget(searchIconLbl);
+    swLay->addWidget(search_edit_, 1);
+
+    auto* settingsBtn = new QPushButton(QStringLiteral("设置"), cmdBar);
+    settingsBtn->setCursor(Qt::PointingHandCursor);
     auto* settingsMenu = new QMenu(settingsBtn);
     auto* secSetAct = settingsMenu->addAction(QStringLiteral("安全设置与快捷键..."));
     auto* healthAct = settingsMenu->addAction(QStringLiteral("保护区体检与一键修复..."));
@@ -618,29 +693,55 @@ void MainWindow::setupUi() {
     auto* masterAct = settingsMenu->addAction(QStringLiteral("修改主密码..."));
     settingsBtn->setMenu(settingsMenu);
 
-    auto* helpBtn = new QPushButton(QStringLiteral("帮助"), this);
+    auto* helpBtn = new QPushButton(QStringLiteral("帮助"), cmdBar);
+    helpBtn->setCursor(Qt::PointingHandCursor);
     auto* helpMenu = new QMenu(helpBtn);
     auto* recAct = helpMenu->addAction(QStringLiteral("应急恢复说明..."));
     helpMenu->addSeparator();
     auto* aboutAct = helpMenu->addAction(QStringLiteral("关于 目录密匣..."));
     helpBtn->setMenu(helpMenu);
 
-    topBar->addWidget(addBtn);
-    topBar->addWidget(lock_all_btn_);
-    topBar->addWidget(search_edit_);
-    topBar->addStretch();
-    topBar->addWidget(settingsBtn);
-    topBar->addWidget(helpBtn);
-    root->addLayout(topBar);
+    cmdLay->addWidget(addBtn);
+    cmdLay->addWidget(lock_all_btn_);
+    cmdLay->addWidget(searchWrap, 1);
+    cmdLay->addStretch();
+    cmdLay->addWidget(settingsBtn);
+    cmdLay->addWidget(helpBtn);
+    root->addWidget(cmdBar);
 
-    // 2. Modern Two-Line Gridless Directory Table (Unified 6px Rounded Card)
-    auto* tableCard = new QFrame(this);
+    // 2. Layered Mica Directory Table Panel
+    auto* tableCard = new QFrame(central);
     tableCard->setObjectName(QStringLiteral("tableCard"));
     auto* tableLayout = new QVBoxLayout(tableCard);
-    tableLayout->setContentsMargins(2, 2, 2, 2);
+    tableLayout->setContentsMargins(1, 1, 1, 2);
     tableLayout->setSpacing(0);
 
-    table_ = new QTableWidget(0, 4, this);
+    auto* panelHeader = new QFrame(tableCard);
+    panelHeader->setStyleSheet(QStringLiteral(
+        "QFrame { background: transparent; border-bottom: 1px solid #e2e8f0; }"));
+    auto* phLay = new QHBoxLayout(panelHeader);
+    phLay->setContentsMargins(14, 8, 14, 8);
+    phLay->setSpacing(8);
+
+    auto* panelTitleLbl = new QLabel(QStringLiteral("受管目录"), panelHeader);
+    panelTitleLbl->setStyleSheet(QStringLiteral("font-size: 10pt; font-weight: 700; color: #0f172a; border: none;"));
+    panel_count_label_ = new QLabel(QStringLiteral("(0)"), panelHeader);
+    panel_count_label_->setStyleSheet(QStringLiteral("font-size: 9.5pt; font-weight: 600; color: #0067c0; font-family: monospace; border: none;"));
+    summary_pill_label_ = new QLabel(QStringLiteral("正在连接后台服务…"), panelHeader);
+    summary_pill_label_->setStyleSheet(QStringLiteral(
+        "background: #eef4fb; color: #475569; border: none; border-radius: 9px; "
+        "padding: 2px 9px; font-size: 8.5pt;"));
+    auto* dragTipLbl = new QLabel(QStringLiteral("支持拖入目录批量加锁"), panelHeader);
+    dragTipLbl->setStyleSheet(QStringLiteral("color: #94a3b8; font-size: 8.5pt; border: none;"));
+
+    phLay->addWidget(panelTitleLbl);
+    phLay->addWidget(panel_count_label_);
+    phLay->addWidget(summary_pill_label_);
+    phLay->addStretch();
+    phLay->addWidget(dragTipLbl);
+    tableLayout->addWidget(panelHeader);
+
+    table_ = new QTableWidget(0, 4, tableCard);
     auto mkHeader = [](const QString& text, Qt::Alignment align) {
         auto* it = new QTableWidgetItem(text);
         it->setTextAlignment(align);
@@ -662,7 +763,7 @@ void MainWindow::setupUi() {
     table_->viewport()->setMouseTracking(true);
     table_->viewport()->installEventFilter(this);
     table_->verticalHeader()->setVisible(false);
-    table_->verticalHeader()->setDefaultSectionSize(54);
+    table_->verticalHeader()->setDefaultSectionSize(56);
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->setSelectionMode(QAbstractItemView::SingleSelection);
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -671,16 +772,16 @@ void MainWindow::setupUi() {
     table_->setItemDelegate(delegate_);
     empty_overlay_ = new EmptyTableOverlay(table_->viewport());
     empty_overlay_->setGeometry(table_->viewport()->rect());
-    tableLayout->addWidget(table_);
+    tableLayout->addWidget(table_, 1);
     root->addWidget(tableCard, 1);
 
-    // 3. Compact Bottom Status Bar
+    // 3. Compact Bottom Status Strip on Mica Canvas
     auto* statusRow = new QHBoxLayout();
-    statusRow->setContentsMargins(2, 0, 2, 0);
-    summary_label_ = new QLabel(QStringLiteral("正在连接后台服务..."), this);
-    summary_label_->setStyleSheet(QStringLiteral("color: #5f6368; font-size: 9pt;"));
-    policy_label_ = new QLabel(this);
-    policy_label_->setStyleSheet(QStringLiteral("color: #5f6368; font-size: 9pt;"));
+    statusRow->setContentsMargins(4, 0, 4, 0);
+    summary_label_ = new QLabel(QStringLiteral("正在连接后台服务…"), central);
+    summary_label_->setStyleSheet(QStringLiteral("color: #64748b; font-size: 9pt;"));
+    policy_label_ = new QLabel(central);
+    policy_label_->setStyleSheet(QStringLiteral("color: #64748b; font-size: 9pt;"));
     statusRow->addWidget(summary_label_);
     statusRow->addStretch();
     statusRow->addWidget(policy_label_);
@@ -882,11 +983,11 @@ void MainWindow::onTrayActivated(QSystemTrayIcon::ActivationReason reason) {
 void MainWindow::refreshState() {
     auto reply = DaemonClient::send("status");
     if (!reply.transport_ok) {
-        summary_label_->setText(QString::fromStdString(reply.message));
+        if (summary_label_) summary_label_->setText(QString::fromStdString(reply.message));
         return;
     }
     if (!reply.ok) {
-        summary_label_->setText(QString::fromStdString(reply.message));
+        if (summary_label_) summary_label_->setText(QString::fromStdString(reply.message));
         return;
     }
 
@@ -996,12 +1097,19 @@ void MainWindow::rebuildTableView() {
         empty_overlay_->setVisible(visible_indices_.empty());
     }
 
+    if (panel_count_label_) {
+        panel_count_label_->setText(QStringLiteral("(%1)").arg(visible_indices_.size()));
+    }
+    if (summary_pill_label_) {
+        summary_pill_label_->setText(QStringLiteral("已锁定 %1 · 已解锁 %2").arg(locked_count).arg(unlocked_count));
+    }
+
     QString summary = QStringLiteral("受管目录 %1 个 · 已锁定 %2 · 已解锁 %3")
         .arg(rows_.size()).arg(locked_count).arg(unlocked_count);
     if (!filter.isEmpty()) {
         summary += QStringLiteral("（筛选显示 %1 项）").arg(visible_indices_.size());
     }
-    summary_label_->setText(summary);
+    if (summary_label_) summary_label_->setText(summary);
 
     if (policy_label_) {
         bool hkOk = monitor_ && monitor_->hotkeyRegistered();
@@ -1013,7 +1121,7 @@ void MainWindow::rebuildTableView() {
             : QStringLiteral("闲置回锁已关闭");
         QString gateText = require_master_on_open_
             ? QStringLiteral("开窗需验密")
-            : QStringLiteral("严格防占用开启");
+            : QStringLiteral("防占用保护开启");
         policy_label_->setText(hkText + QStringLiteral("  |  ") + idleText + QStringLiteral("  |  ") + gateText);
     }
 
@@ -1046,6 +1154,17 @@ bool MainWindow::ensureMasterPasswordInitialized() {
 }
 
 void MainWindow::openFolderInFileManager(const QString& path) {
+    // Prefer launching native file manager (Peony first on Kylin) so third-party
+    // inode/directory .desktop handlers cannot hijack folder opening.
+    static const char* kFileManagers[] = {
+        "peony", "dde-file-manager", "nautilus", "caja", "nemo", "dolphin", "thunar", "pcmanfm"
+    };
+    for (const char* fm : kFileManagers) {
+        const QString exe = QStandardPaths::findExecutable(QString::fromLatin1(fm));
+        if (!exe.isEmpty() && QProcess::startDetached(exe, {path})) {
+            return;
+        }
+    }
     QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
@@ -1614,10 +1733,10 @@ void MainWindow::onShowRecoveryGuide() {
     auto* browser = new QTextBrowser(&dlg);
     browser->setOpenExternalLinks(false);
     browser->setStyleSheet(QStringLiteral(
-        "QTextBrowser { background: #ffffff; border: 1px solid #d0d7de; border-radius: 6px; padding: 6px 10px; }"));
+        "QTextBrowser { background: #ffffff; border: 1px solid #d8e1ec; border-radius: 10px; padding: 8px 12px; }"));
     browser->setHtml(QStringLiteral(
-        "<div style=\"font-size:13px; color:#1f2328; line-height:1.45;\">"
-        "<div style=\"color:#0d47a1; font-weight:700; font-size:14px; margin-bottom:4px;\">"
+        "<div style=\"font-size:13px; color:#1e293b; line-height:1.45;\">"
+        "<div style=\"color:#0067c0; font-weight:700; font-size:14px; margin-bottom:4px;\">"
         "1. 情形一：原目录不见了、原地只剩蓝锁加密入口（最常见：忘记密码 / 误删状态文件 / 卸载后）</div>"
         "<div style=\"margin-left:10px;\">真实目录完整存放在以下隐藏系统路径之一：</div>"
         "<div style=\"margin-left:20px; margin-top:2px;\">• 系统根目录：<span style=\"font-family:monospace; background-color:#f1f5f9; color:#b45309;\">&nbsp;/var/lib/dirlocker/vault/&nbsp;</span></div>"
@@ -1637,7 +1756,7 @@ void MainWindow::onShowRecoveryGuide() {
         "<pre style=\"background-color:#f1f5f9; color:#0c4a6e; font-family:'Noto Sans Mono','DejaVu Sans Mono',monospace; margin:2px 0 12px 24px;\">"
         " sudo chattr -i -a \"原目录路径.desktop\" \"原目录路径.dlock\" 2&gt;/dev/null\n"
         " sudo rm -f \"原目录路径.desktop\" \"原目录路径.dlock\" </pre>"
-        "<div style=\"color:#0d47a1; font-weight:700; font-size:14px; margin-top:6px; margin-bottom:4px;\">"
+        "<div style=\"color:#0067c0; font-weight:700; font-size:14px; margin-top:6px; margin-bottom:4px;\">"
         "2. 情形二：原目录仍在原地，但打开提示权限不足（旧版兼容）</div>"
         "<div style=\"margin-left:10px;\">直接在终端执行：</div>"
         "<pre style=\"background-color:#f1f5f9; color:#0c4a6e; font-family:'Noto Sans Mono','DejaVu Sans Mono',monospace; margin:2px 0 4px 24px;\">"
@@ -1673,19 +1792,30 @@ void MainWindow::onShowRecoveryGuide() {
 void MainWindow::onShowAbout() {
     QDialog dlg(this);
     dlg.setWindowTitle(QStringLiteral("关于 目录密匣"));
-    dlg.setMinimumWidth(640);
+    dlg.setMinimumWidth(648);
+    dlg.setStyleSheet(QStringLiteral(
+        "QDialog { background: #eef3fa; }"
+        "QFrame#aboutMetaCard, QFrame#aboutFeatCard { background: #ffffff; border: 1px solid #d8e1ec; border-radius: 12px; }"
+        "QPushButton#aboutOkBtn { background: #0067c0; color: #ffffff; border: none; border-radius: 8px; "
+        "  padding: 6px 20px; font-weight: 600; }"
+        "QPushButton#aboutOkBtn:hover { background: #005fb8; }"
+        "QPushButton#aboutOkBtn:pressed { background: #00529e; }"
+        "QPushButton#copyLinkBtn { background: #f1f5f9; color: #475569; border: 1px solid #dce4ee; "
+        "  border-radius: 6px; padding: 2px 8px; font-size: 8.5pt; }"
+        "QPushButton#copyLinkBtn:hover { background: #e8f3fc; color: #0067c0; border-color: #93c5fd; }"));
 
     auto* root = new QVBoxLayout(&dlg);
     root->setSizeConstraint(QLayout::SetMinimumSize);
-    root->setContentsMargins(22, 18, 22, 16);
+    root->setContentsMargins(22, 20, 22, 16);
     root->setSpacing(12);
 
+    // Top Hero Header
     auto* headerRow = new QHBoxLayout();
     headerRow->setSpacing(14);
     auto* iconLabel = new QLabel(&dlg);
-    iconLabel->setPixmap(createAppIcon(true).pixmap(48, 48));
-    iconLabel->setFixedSize(48, 48);
-    headerRow->addWidget(iconLabel, 0, Qt::AlignTop);
+    iconLabel->setPixmap(createAppIcon(true).pixmap(52, 52));
+    iconLabel->setFixedSize(52, 52);
+    headerRow->addWidget(iconLabel, 0, Qt::AlignVCenter);
 
     auto* titleCol = new QVBoxLayout();
     titleCol->setSpacing(4);
@@ -1693,19 +1823,19 @@ void MainWindow::onShowAbout() {
     titleRow->setSpacing(8);
     titleRow->setContentsMargins(0, 0, 0, 0);
     auto* titleLabel = new QLabel(
-        QStringLiteral("<span style=\"font-size:15pt; font-weight:700; color:#0d47a1;\">目录密匣</span>"),
+        QStringLiteral("<span style=\"font-size:15pt; font-weight:700; color:#0f172a;\">目录密匣</span>"),
         &dlg);
     titleLabel->setTextFormat(Qt::RichText);
     auto* verBadge = new QLabel(QStringLiteral("v") + QStringLiteral(DIRLOCKER_VERSION_STR), &dlg);
     verBadge->setStyleSheet(QStringLiteral(
-        "QLabel { background: #ebf3fe; color: #0d47a1; border: 1px solid #90caf9; "
-        "border-radius: 9px; padding: 1px 8px; font-size: 9pt; font-weight: 600; }"));
+        "QLabel { background: #e8f3fc; color: #0067c0; border: 1px solid #bae0ff; "
+        "border-radius: 10px; padding: 1px 9px; font-size: 9pt; font-weight: 600; font-family: monospace; }"));
     titleRow->addWidget(titleLabel);
     titleRow->addWidget(verBadge);
     titleRow->addStretch();
 
     auto* subLabel = new QLabel(
-        QStringLiteral("<span style=\"color:#5f6368;\">轻量级本地目录密码保护工具</span>"),
+        QStringLiteral("<span style=\"color:#64748b;\">DirLocker · 轻量级本地目录密码保护工具</span>"),
         &dlg);
     subLabel->setTextFormat(Qt::RichText);
     titleCol->addLayout(titleRow);
@@ -1713,49 +1843,92 @@ void MainWindow::onShowAbout() {
     headerRow->addLayout(titleCol, 1);
     root->addLayout(headerRow);
 
-    auto* line = new QFrame(&dlg);
-    line->setFrameShape(QFrame::HLine);
-    line->setFrameShadow(QFrame::Sunken);
-    root->addWidget(line);
+    // Grouped Metadata Card (matching DocPurger AboutModal)
+    auto* metaCard = new QFrame(&dlg);
+    metaCard->setObjectName(QStringLiteral("aboutMetaCard"));
+    auto* metaLay = new QVBoxLayout(metaCard);
+    metaLay->setContentsMargins(16, 6, 16, 6);
+    metaLay->setSpacing(0);
 
-    auto* metaLabel = new QLabel(
-        QStringLiteral(
-            "<div style=\"line-height:165%;\">"
-            "<span style=\"color:#5f6368;\">适用平台：</span><span style=\"color:#1f2328;\">银河麒麟 V10 SP1 / Ubuntu 20.04 (x64)</span><br/>"
-            "<span style=\"color:#5f6368;\">开发人员：</span><span style=\"color:#1f2328;\">yinchaow &amp; Gemini</span><br/>"
-            "<span style=\"color:#5f6368;\">开源协议：</span><span style=\"color:#1f2328;\">MIT License</span><br/>"
-            "<span style=\"color:#5f6368;\">项目主页：</span>"
-            "<a style=\"color:#0d47a1; text-decoration:none; font-weight:500;\" "
-            "href=\"https://github.com/yinchaow/DirLocker\">https://github.com/yinchaow/DirLocker</a>"
-            "</div>"),
-        &dlg);
-    metaLabel->setTextFormat(Qt::RichText);
-    metaLabel->setTextInteractionFlags(Qt::TextBrowserInteraction);
-    metaLabel->setOpenExternalLinks(true);
-    root->addWidget(metaLabel);
+    auto addMetaRow = [&](const QString& key, QWidget* valWidget, bool withSep) {
+        auto* row = new QHBoxLayout();
+        row->setContentsMargins(0, 7, 0, 7);
+        row->setSpacing(12);
+        auto* k = new QLabel(key, metaCard);
+        k->setStyleSheet(QStringLiteral("color: #64748b; font-size: 9.5pt;"));
+        row->addWidget(k);
+        row->addStretch();
+        row->addWidget(valWidget);
+        metaLay->addLayout(row);
+        if (withSep) {
+            auto* sep = new QFrame(metaCard);
+            sep->setFrameShape(QFrame::HLine);
+            sep->setStyleSheet(QStringLiteral("color: #eef2f7;"));
+            metaLay->addWidget(sep);
+        }
+    };
 
+    auto* platVal = new QLabel(QStringLiteral("银河麒麟 V10 SP1 / Ubuntu 20.04 (x64)"), metaCard);
+    platVal->setStyleSheet(QStringLiteral("color: #0f172a; font-weight: 500; font-size: 9.5pt;"));
+    addMetaRow(QStringLiteral("适用平台"), platVal, true);
+
+    auto* devVal = new QLabel(QStringLiteral("yinchaow & Gemini"), metaCard);
+    devVal->setStyleSheet(QStringLiteral("color: #0f172a; font-weight: 600; font-size: 9.5pt;"));
+    addMetaRow(QStringLiteral("开发人员"), devVal, true);
+
+    auto* licVal = new QLabel(QStringLiteral("MIT License"), metaCard);
+    licVal->setStyleSheet(QStringLiteral("color: #0f172a; font-family: monospace; font-weight: 500; font-size: 9.5pt;"));
+    addMetaRow(QStringLiteral("开源协议"), licVal, true);
+
+    auto* linkWrap = new QWidget(metaCard);
+    auto* linkLay = new QHBoxLayout(linkWrap);
+    linkLay->setContentsMargins(0, 0, 0, 0);
+    linkLay->setSpacing(8);
+    auto* linkLbl = new QLabel(
+        QStringLiteral("<a style=\"color:#0067c0; text-decoration:none; font-family:monospace; font-weight:500;\" "
+                       "href=\"https://github.com/yinchaow/DirLocker\">https://github.com/yinchaow/DirLocker</a>"),
+        linkWrap);
+    linkLbl->setTextFormat(Qt::RichText);
+    linkLbl->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    linkLbl->setOpenExternalLinks(true);
+    auto* copyLinkBtn = new QPushButton(QStringLiteral("复制"), linkWrap);
+    copyLinkBtn->setObjectName(QStringLiteral("copyLinkBtn"));
+    copyLinkBtn->setCursor(Qt::PointingHandCursor);
+    connect(copyLinkBtn, &QPushButton::clicked, &dlg, [copyLinkBtn]() {
+        if (QClipboard* cb = QApplication::clipboard()) {
+            cb->setText(QStringLiteral("https://github.com/yinchaow/DirLocker"));
+        }
+        copyLinkBtn->setText(QStringLiteral("已复制"));
+        QTimer::singleShot(1500, copyLinkBtn, [copyLinkBtn]() {
+            copyLinkBtn->setText(QStringLiteral("复制"));
+        });
+    });
+    linkLay->addWidget(linkLbl);
+    linkLay->addWidget(copyLinkBtn);
+    addMetaRow(QStringLiteral("项目主页"), linkWrap, false);
+    root->addWidget(metaCard);
+
+    // Core Features Card
     auto* featCard = new QFrame(&dlg);
     featCard->setObjectName(QStringLiteral("aboutFeatCard"));
     featCard->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
-    featCard->setStyleSheet(QStringLiteral(
-        "#aboutFeatCard { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; }"));
     auto* cardLay = new QVBoxLayout(featCard);
-    cardLay->setContentsMargins(14, 10, 14, 10);
-    cardLay->setSpacing(6);
+    cardLay->setContentsMargins(16, 12, 16, 12);
+    cardLay->setSpacing(7);
 
-    auto* featHeader = new QLabel(QStringLiteral("<b style=\"color:#0d47a1;\">核心功能</b>"), featCard);
+    auto* featHeader = new QLabel(QStringLiteral("<b style=\"color:#0f172a; font-size:10pt;\">核心功能</b>"), featCard);
     featHeader->setTextFormat(Qt::RichText);
     cardLay->addWidget(featHeader);
 
     auto* featBody = new QLabel(
         QStringLiteral(
-            "<div style=\"line-height:175%; color:#1f2328; white-space:nowrap;\">"
-            "<span style=\"color:#0d47a1;\">•</span> <b>双重密码体系</b>：支持统一主密码与单目录独立密码，可自由改密与切换<br/>"
-            "<span style=\"color:#0d47a1;\">•</span> <b>快捷验证解锁</b>：受保护目录无角标独立标识，双击直接弹窗输入密码解锁<br/>"
-            "<span style=\"color:#0d47a1;\">•</span> <b>批量拖拽加锁</b>：支持单个或多个文件夹直接拖入主窗口快速批量加锁<br/>"
-            "<span style=\"color:#0d47a1;\">•</span> <b>全锁与防占用</b>：支持 <span style=\"background-color:#e2e8f0; color:#0c4a6e; font-family:monospace; font-weight:600;\">&nbsp;%1&nbsp;</span> 一键全锁与闲置回锁，被占用时智能跳过<br/>"
-            "<span style=\"color:#0d47a1;\">•</span> <b>界面与防爆破</b>：可选打开主界面验证主密码，连续输错密码触发冷却退避<br/>"
-            "<span style=\"color:#0d47a1;\">•</span> <b>无损与体检修复</b>：绝不改动原始文件内容，内置保护区健康体检与安全修复"
+            "<div style=\"line-height:178%; color:#334155; white-space:nowrap;\">"
+            "<span style=\"color:#0f7b43; font-weight:700;\">✓</span> <b style=\"color:#0f172a;\">双重密码体系</b>：支持统一主密码与单目录独立密码，可自由改密与切换<br/>"
+            "<span style=\"color:#0f7b43; font-weight:700;\">✓</span> <b style=\"color:#0f172a;\">快捷验证解锁</b>：受保护目录无角标独立标识，双击直接弹窗输入密码解锁<br/>"
+            "<span style=\"color:#0f7b43; font-weight:700;\">✓</span> <b style=\"color:#0f172a;\">批量拖拽加锁</b>：支持单个或多个文件夹直接拖入主窗口快速批量加锁<br/>"
+            "<span style=\"color:#0f7b43; font-weight:700;\">✓</span> <b style=\"color:#0f172a;\">全锁与防占用</b>：支持 <span style=\"background-color:#e8f3fc; color:#0067c0; font-family:monospace; font-weight:600;\">&nbsp;%1&nbsp;</span> 一键全锁与闲置回锁，被占用时智能跳过<br/>"
+            "<span style=\"color:#0f7b43; font-weight:700;\">✓</span> <b style=\"color:#0f172a;\">界面与防爆破</b>：可选打开主界面验证主密码，连续输错密码触发冷却退避<br/>"
+            "<span style=\"color:#0f7b43; font-weight:700;\">✓</span> <b style=\"color:#0f172a;\">无损与体检修复</b>：绝不改动原始文件内容，内置保护区健康体检与安全修复"
             "</div>").arg(hotkey_.toHtmlEscaped()),
         featCard);
     featBody->setTextFormat(Qt::RichText);
@@ -1764,11 +1937,19 @@ void MainWindow::onShowAbout() {
     cardLay->addWidget(featBody);
     root->addWidget(featCard);
 
+    // Footer Strip (Offline Security Declaration + Primary OK)
     auto* btnRow = new QHBoxLayout();
+    auto* footerLbl = new QLabel(
+        QStringLiteral("<span style=\"color:#0f7b43; font-weight:700;\">●</span> "
+                       "<span style=\"color:#64748b; font-size:8.5pt;\">纯本地离线运行 · 绝不改动原始文件 · Copyright © 2026 yinchaow</span>"),
+        &dlg);
+    footerLbl->setTextFormat(Qt::RichText);
+    btnRow->addWidget(footerLbl);
     btnRow->addStretch();
     auto* okBtn = new QPushButton(QStringLiteral("确定"), &dlg);
+    okBtn->setObjectName(QStringLiteral("aboutOkBtn"));
     okBtn->setDefault(true);
-    okBtn->setMinimumWidth(86);
+    okBtn->setCursor(Qt::PointingHandCursor);
     connect(okBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
     btnRow->addWidget(okBtn);
     root->addLayout(btnRow);

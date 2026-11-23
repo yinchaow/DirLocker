@@ -55,7 +55,7 @@ install -Dm644 "${ICON_SRC}/mimetypes/128x128/dirlocker-folder.png" \
 
 cat > "${PKG_ROOT}/DEBIAN/control" <<'EOF'
 Package: dirlocker
-Version: 2.2.2
+Version: 2.3.0
 Section: utils
 Priority: optional
 Architecture: amd64
@@ -96,6 +96,37 @@ if command -v update-desktop-database >/dev/null 2>&1 && [ -d /usr/share/applica
 fi
 if command -v gtk-update-icon-cache >/dev/null 2>&1 && [ -d /usr/share/icons/hicolor ]; then
     gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+fi
+# 若存在活动图形桌面会话，异步弹出安装完成向导（含「立即启动 目录密匣」勾选框）
+if [ "$1" = "configure" ] && [ -x /usr/bin/dirlocker ]; then
+    DESKTOP_USER=""
+    DESKTOP_DISP=""
+    DESKTOP_XAUTH=""
+    for proc_env in /proc/[0-9]*/environ; do
+        [ -r "$proc_env" ] || continue
+        uid=$(stat -c '%u' "$(dirname "$proc_env")" 2>/dev/null || echo 0)
+        [ "$uid" -ge 1000 ] 2>/dev/null || continue
+        env_txt=$(tr '\0' '\n' < "$proc_env" 2>/dev/null || true)
+        disp=$(printf '%s\n' "$env_txt" | sed -n 's/^DISPLAY=//p' | head -n 1)
+        [ -n "$disp" ] || continue
+        usr=$(id -nu "$uid" 2>/dev/null || true)
+        [ -n "$usr" ] || continue
+        xauth=$(printf '%s\n' "$env_txt" | sed -n 's/^XAUTHORITY=//p' | head -n 1)
+        DESKTOP_USER="$usr"
+        DESKTOP_DISP="$disp"
+        DESKTOP_XAUTH="$xauth"
+        break
+    done
+    if [ -n "$DESKTOP_USER" ] && [ -n "$DESKTOP_DISP" ]; then
+        DESKTOP_UID=$(id -u "$DESKTOP_USER" 2>/dev/null || echo 1000)
+        DESKTOP_HOME=$(getent passwd "$DESKTOP_USER" 2>/dev/null | cut -d: -f6)
+        [ -n "$DESKTOP_XAUTH" ] || DESKTOP_XAUTH="${DESKTOP_HOME:-/home/$DESKTOP_USER}/.Xauthority"
+        (
+            setsid su -s /bin/sh "$DESKTOP_USER" -c \
+                "DISPLAY='$DESKTOP_DISP' XAUTHORITY='$DESKTOP_XAUTH' XDG_RUNTIME_DIR='/run/user/$DESKTOP_UID' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$DESKTOP_UID/bus' /usr/bin/dirlocker --post-install" \
+                </dev/null >/dev/null 2>&1 &
+        ) >/dev/null 2>&1 || true
+    fi
 fi
 exit 0
 EOF

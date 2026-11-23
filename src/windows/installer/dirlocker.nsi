@@ -4,10 +4,10 @@ Unicode True
 !include "LogicLib.nsh"
 
 !ifndef APP_VERSION
-  !define APP_VERSION "2.2.2"
+  !define APP_VERSION "2.3.0"
 !endif
 !ifndef OUT_FILE
-  !define OUT_FILE "DirLocker_Setup_v2.2.2.exe"
+  !define OUT_FILE "DirLocker_Setup_v2.3.0.exe"
 !endif
 !ifndef SRC_WIN_DIR
   !define SRC_WIN_DIR ".."

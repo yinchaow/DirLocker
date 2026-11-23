@@ -34,12 +34,13 @@ std::wstring get_window_text_w(HWND h) {
     return buf;
 }
 
-constexpr COLORREF kColorMuted = RGB(95, 99, 104);
-constexpr COLORREF kColorText = RGB(31, 35, 40);
-constexpr COLORREF kColorAccent = RGB(13, 71, 161);
+constexpr COLORREF kColorMuted = RGB(100, 116, 139);
+constexpr COLORREF kColorText = RGB(15, 23, 42);
+constexpr COLORREF kColorAccent = RGB(0, 103, 192);
 constexpr COLORREF kColorWarning = RGB(180, 83, 9);
 constexpr COLORREF kColorDanger = RGB(185, 28, 28);
-constexpr COLORREF kColorOk = RGB(21, 128, 61);
+constexpr COLORREF kColorOk = RGB(15, 123, 67);
+constexpr COLORREF kColorDlgBg = RGB(238, 243, 250);
 
 void dlg_add_round_rect_path(Gdiplus::GraphicsPath& path, Gdiplus::REAL x, Gdiplus::REAL y,
                              Gdiplus::REAL w, Gdiplus::REAL h, Gdiplus::REAL r) {
@@ -98,6 +99,7 @@ public:
     HFONT small_bold_font = nullptr;
     HFONT title_font = nullptr;
     HICON header_icon = nullptr;
+    HBRUSH dlg_bg_brush = nullptr;
     int dpi = 96;
     bool accepted = false;
     bool done = false;
@@ -449,7 +451,7 @@ public:
         const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
         const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
 
-        HBRUSH clear_br = CreateSolidBrush(GetSysColor(COLOR_WINDOW));
+        HBRUSH clear_br = CreateSolidBrush(kColorDlgBg);
         FillRect(hdc, &rc, clear_br);
         DeleteObject(clear_br);
 
@@ -514,9 +516,24 @@ public:
 
         if (self) {
             switch (msg) {
+                case WM_ERASEBKGND: {
+                    HDC hdc = reinterpret_cast<HDC>(wp);
+                    RECT cr{};
+                    GetClientRect(h, &cr);
+                    if (self->dlg_bg_brush) {
+                        FillRect(hdc, &cr, self->dlg_bg_brush);
+                        return 1;
+                    }
+                    break;
+                }
                 case WM_PAINT: {
                     PAINTSTRUCT ps{};
                     HDC hdc = BeginPaint(h, &ps);
+                    RECT cr{};
+                    GetClientRect(h, &cr);
+                    if (self->dlg_bg_brush) {
+                        FillRect(hdc, &cr, self->dlg_bg_brush);
+                    }
                     if (!self->cards.empty() || !self->pills.empty()) {
                         Gdiplus::Graphics g(hdc);
                         g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
@@ -579,6 +596,19 @@ public:
                     }
                     break;
                 }
+                case WM_CTLCOLORBTN: {
+                    HDC hdc = reinterpret_cast<HDC>(wp);
+                    HWND ctrl = reinterpret_cast<HWND>(lp);
+                    for (const auto& m : self->ctrl_card_map) {
+                        if (m.first == ctrl && m.second < self->cards.size()) {
+                            const auto& c = self->cards[m.second];
+                            SetBkMode(hdc, TRANSPARENT);
+                            if (c.brush) return reinterpret_cast<LRESULT>(c.brush);
+                        }
+                    }
+                    SetBkMode(hdc, TRANSPARENT);
+                    return reinterpret_cast<LRESULT>(self->dlg_bg_brush ? self->dlg_bg_brush : GetSysColorBrush(COLOR_WINDOW));
+                }
                 case WM_CTLCOLORSTATIC: {
                     HDC hdc = reinterpret_cast<HDC>(wp);
                     HWND ctrl = reinterpret_cast<HWND>(lp);
@@ -586,17 +616,9 @@ public:
                     GetClassNameW(ctrl, cls, 32);
                     if (_wcsicmp(cls, L"Edit") == 0) {
                         SetBkMode(hdc, OPAQUE);
-                        SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
+                        SetBkColor(hdc, RGB(255, 255, 255));
                         SetTextColor(hdc, kColorText);
-                        return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
-                    }
-                    for (const auto& m : self->ctrl_card_map) {
-                        if (m.first == ctrl && m.second < self->cards.size()) {
-                            const auto& c = self->cards[m.second];
-                            SetTextColor(hdc, kColorText);
-                            SetBkMode(hdc, TRANSPARENT);
-                            if (c.brush) return reinterpret_cast<LRESULT>(c.brush);
-                        }
+                        return reinterpret_cast<LRESULT>(GetStockObject(WHITE_BRUSH));
                     }
                     COLORREF fg = kColorText;
                     for (const auto& s : self->label_styles) {
@@ -605,9 +627,17 @@ public:
                             break;
                         }
                     }
+                    for (const auto& m : self->ctrl_card_map) {
+                        if (m.first == ctrl && m.second < self->cards.size()) {
+                            const auto& c = self->cards[m.second];
+                            SetTextColor(hdc, fg);
+                            SetBkMode(hdc, TRANSPARENT);
+                            if (c.brush) return reinterpret_cast<LRESULT>(c.brush);
+                        }
+                    }
                     SetTextColor(hdc, fg);
                     SetBkMode(hdc, TRANSPARENT);
-                    return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+                    return reinterpret_cast<LRESULT>(self->dlg_bg_brush ? self->dlg_bg_brush : GetSysColorBrush(COLOR_WINDOW));
                 }
                 case WM_NOTIFY: {
                     auto* nm = reinterpret_cast<NMHDR*>(lp);
@@ -691,10 +721,20 @@ public:
         }
         bool use_parent_rect = (parent && IsWindow(parent) && IsWindowVisible(parent) && !IsIconic(parent));
         dpi = get_window_dpi(use_parent_rect ? parent : GetForegroundWindow());
-        font = create_ui_font(dpi, 9, false);
-        bold_font = create_ui_font(dpi, 9, true);
-        small_bold_font = create_ui_font(dpi, 8, true);
+        font = CreateFontW(-MulDiv(19, dpi, 144), 0, 0, 0, FW_NORMAL,
+                           FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                           DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei UI");
+        bold_font = CreateFontW(-MulDiv(19, dpi, 144), 0, 0, 0, FW_SEMIBOLD,
+                                FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei UI");
+        small_bold_font = CreateFontW(-MulDiv(17, dpi, 144), 0, 0, 0, FW_SEMIBOLD,
+                                      FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                      DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei UI");
         title_font = create_ui_font(dpi, 13, true);
+        dlg_bg_brush = CreateSolidBrush(kColorDlgBg);
 
         DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
         DWORD ex_style = WS_EX_DLGMODALFRAME;
@@ -761,6 +801,7 @@ public:
             if (c.brush) DeleteObject(c.brush);
         }
         if (header_icon) DestroyIcon(header_icon);
+        if (dlg_bg_brush) DeleteObject(dlg_bg_brush);
         if (font) DeleteObject(font);
         if (bold_font) DeleteObject(bold_font);
         if (small_bold_font) DeleteObject(small_bold_font);
@@ -1820,63 +1861,78 @@ void win_show_recovery_dialog(HWND parent) {
 
 void win_show_about_dialog(HWND parent, const std::string& current_hotkey) {
     ModalDialogBase dlg;
-    const int dlg_w = 640;
-    if (!dlg.create(parent, L"关于 目录密匣", dlg_w, 470)) return;
+    const int dlg_w = 648;
+    if (!dlg.create(parent, L"关于 目录密匣", dlg_w, 500)) return;
     const std::wstring whk = utf8_to_wide(HotkeySpec::normalize(current_hotkey, "Ctrl+Alt+K"));
 
-    dlg.add_app_icon(20, 18, 48);
+    // Top Hero Header
+    dlg.add_app_icon(22, 18, 48);
     int title_w = dlg.measure_text_logical_w(L"目录密匣", dlg.title_font);
-    if (title_w < 60) title_w = 72;
-    dlg.add_styled_label(L"目录密匣", 80, 17, title_w + 6, 28, kColorAccent, true, -1, dlg.title_font);
+    if (title_w < 60) title_w = 76;
+    dlg.add_styled_label(L"目录密匣", 82, 16, title_w + 6, 28, kColorText, true, -1, dlg.title_font);
 
     std::wstring ver_txt = L"v" DIRLOCKER_VERSION_WSTR;
-    int pill_w = dlg.measure_text_logical_w(ver_txt, dlg.small_bold_font) + 18;
-    if (pill_w < 50) pill_w = 50;
-    dlg.add_pill(80 + title_w + 10, 20, pill_w, 22, ver_txt,
-                 RGB(235, 243, 254), RGB(144, 202, 249), kColorAccent, 9);
+    int pill_w = dlg.measure_text_logical_w(ver_txt, dlg.small_bold_font) + 20;
+    if (pill_w < 54) pill_w = 54;
+    dlg.add_pill(82 + title_w + 10, 19, pill_w, 22, ver_txt,
+                 RGB(232, 243, 252), RGB(186, 224, 255), kColorAccent, 10);
 
-    dlg.add_styled_label(L"轻量级本地目录密码保护工具", 80, 46, 440, 20, kColorMuted, false);
+    dlg.add_styled_label(L"DirLocker · 轻量级本地目录密码保护工具", 82, 46, 460, 20, kColorMuted, false);
 
-    dlg.add_styled_label(L"适用平台：", 20, 82, 74, 20, kColorMuted, false);
-    dlg.add_styled_label(L"Windows 10 / 11 (x64)", 96, 82, 420, 20, kColorText, false);
+    // Grouped Metadata White Card (DocPurger AboutModal style)
+    const COLORREF kCardBg = RGB(255, 255, 255);
+    const COLORREF kCardBd = RGB(216, 225, 236);
+    const int meta_y = 80;
+    const int meta_h = 114;
+    const int card_w = dlg_w - 44;
+    size_t meta_card = dlg.add_card(22, meta_y, card_w, meta_h, kCardBg, kCardBd, 12, true);
 
-    dlg.add_styled_label(L"开发人员：", 20, 106, 74, 20, kColorMuted, false);
-    dlg.add_styled_label(L"yinchaow & Gemini", 96, 106, 420, 20, kColorText, false);
+    auto add_meta = [&](int row_idx, const wchar_t* k, const wchar_t* v, bool bold_v = false) {
+        int ry = meta_y + 10 + row_idx * 24;
+        HWND lk = dlg.add_styled_label(k, 38, ry, 76, 20, kColorMuted, false);
+        HWND lv = dlg.add_styled_label(v, 118, ry, 420, 20, kColorText, bold_v);
+        dlg.bind_ctrl_card(lk, meta_card);
+        dlg.bind_ctrl_card(lv, meta_card);
+    };
+    add_meta(0, L"适用平台", L"Windows 10 / 11 (x64)");
+    add_meta(1, L"开发人员", L"yinchaow & Gemini", true);
+    add_meta(2, L"开源协议", L"MIT License");
 
-    dlg.add_styled_label(L"开源协议：", 20, 130, 74, 20, kColorMuted, false);
-    dlg.add_styled_label(L"MIT License", 96, 130, 420, 20, kColorText, false);
-
-    dlg.add_styled_label(L"项目主页：", 20, 154, 74, 20, kColorMuted, false);
+    int link_y = meta_y + 10 + 3 * 24;
+    HWND lk_url = dlg.add_styled_label(L"项目主页", 38, link_y, 76, 20, kColorMuted, false);
+    dlg.bind_ctrl_card(lk_url, meta_card);
     HWND link = dlg.add_syslink(
         L"<a href=\"https://github.com/yinchaow/DirLocker\">https://github.com/yinchaow/DirLocker</a>",
-        96, 154, 420, 20, 7001);
-    if (!link) {
-        dlg.add_styled_label(L"https://github.com/yinchaow/DirLocker", 96, 154, 420, 20, kColorAccent, false);
+        118, link_y, 350, 20, 7001);
+    if (link) {
+        dlg.bind_ctrl_card(link, meta_card);
+    } else {
+        HWND lv = dlg.add_styled_label(L"https://github.com/yinchaow/DirLocker", 118, link_y, 350, 20, kColorAccent, false);
+        dlg.bind_ctrl_card(lv, meta_card);
     }
+    HWND copy_url_btn = dlg.add_button(L"复制", dlg_w - 22 - 14 - 56, link_y - 2, 56, 22, 7003, false);
 
-    const COLORREF kCardBg = RGB(246, 248, 250);
-    const COLORREF kCardBd = RGB(208, 215, 222);
-    const int card_y = 186;
-    const int card_w = dlg_w - 40;
-    const int inner_w = card_w - 24;
+    // Core Features White Card
+    const int card_y = meta_y + meta_h + 12;
+    const int inner_w = card_w - 28;
     int feat_h = 180;
-    size_t card_idx = dlg.add_card(20, card_y, card_w, feat_h + 20, kCardBg, kCardBd, 6, true);
+    size_t card_idx = dlg.add_card(22, card_y, card_w, feat_h + 22, kCardBg, kCardBd, 12, true);
 
-    HWND feat_re = dlg.add_rich_box(32, card_y + 10, inner_w, 280, 7002, kCardBg, false, false);
+    HWND feat_re = dlg.add_rich_box(36, card_y + 11, inner_w, 280, 7002, kCardBg, false, false);
     if (feat_re) {
         const wchar_t* kUi = L"Microsoft YaHei UI";
         const wchar_t* kMono = L"Consolas";
-        const COLORREF kKeyBg = RGB(226, 232, 240);
-        const COLORREF kKeyFg = RGB(12, 74, 110);
+        const COLORREF kKeyBg = RGB(232, 243, 252);
+        const COLORREF kKeyFg = kColorAccent;
 
-        ModalDialogBase::append_rich_span(feat_re, L"核心功能\r", kUi, 185, kColorAccent, 0, true, false, 0, 50);
+        ModalDialogBase::append_rich_span(feat_re, L"核心功能\r", kUi, 190, kColorText, 0, true, false, 0, 55);
 
         auto add_feat = [&](const wchar_t* title, const wchar_t* desc, bool trailing_cr = true) {
-            ModalDialogBase::append_rich_span(feat_re, L"• ", kUi, 180, kColorAccent, 0, true, false, 40, 35);
-            ModalDialogBase::append_rich_span(feat_re, title, kUi, 180, kColorText, 0, true, false, 40, 35);
-            ModalDialogBase::append_rich_span(feat_re, desc, kUi, 180, kColorText, 0, false, false, 40, 35);
+            ModalDialogBase::append_rich_span(feat_re, L"✓ ", kUi, 180, kColorOk, 0, true, false, 40, 38);
+            ModalDialogBase::append_rich_span(feat_re, title, kUi, 180, kColorText, 0, true, false, 40, 38);
+            ModalDialogBase::append_rich_span(feat_re, desc, kUi, 180, RGB(51, 65, 85), 0, false, false, 40, 38);
             if (trailing_cr) {
-                ModalDialogBase::append_rich_span(feat_re, L"\r", kUi, 180, kColorText, 0, false, false, 40, 35);
+                ModalDialogBase::append_rich_span(feat_re, L"\r", kUi, 180, kColorText, 0, false, false, 40, 38);
             }
         };
 
@@ -1884,11 +1940,11 @@ void win_show_about_dialog(HWND parent, const std::string& current_hotkey) {
         add_feat(L"快捷验证解锁：", L"受保护目录无角标独立标识，双击直接弹窗输入密码解锁");
         add_feat(L"批量拖拽加锁：", L"支持单个或多个文件夹直接拖入主窗口快速批量锁定");
 
-        ModalDialogBase::append_rich_span(feat_re, L"• ", kUi, 180, kColorAccent, 0, true, false, 40, 35);
-        ModalDialogBase::append_rich_span(feat_re, L"全锁与防占用：", kUi, 180, kColorText, 0, true, false, 40, 35);
-        ModalDialogBase::append_rich_span(feat_re, L"支持 ", kUi, 180, kColorText, 0, false, false, 40, 35);
-        ModalDialogBase::append_rich_span(feat_re, (L" " + whk + L" ").c_str(), kMono, 175, kKeyFg, kKeyBg, false, true, 40, 35);
-        ModalDialogBase::append_rich_span(feat_re, L" 一键全锁与闲置回锁，被占用时智能跳过\r", kUi, 180, kColorText, 0, false, false, 40, 35);
+        ModalDialogBase::append_rich_span(feat_re, L"✓ ", kUi, 180, kColorOk, 0, true, false, 40, 38);
+        ModalDialogBase::append_rich_span(feat_re, L"全锁与防占用：", kUi, 180, kColorText, 0, true, false, 40, 38);
+        ModalDialogBase::append_rich_span(feat_re, L"支持 ", kUi, 180, RGB(51, 65, 85), 0, false, false, 40, 38);
+        ModalDialogBase::append_rich_span(feat_re, (L" " + whk + L" ").c_str(), kMono, 175, kKeyFg, kKeyBg, true, true, 40, 38);
+        ModalDialogBase::append_rich_span(feat_re, L" 一键全锁与闲置回锁，被占用时智能跳过\r", kUi, 180, RGB(51, 65, 85), 0, false, false, 40, 38);
 
         add_feat(L"界面与防爆破：", L"可选打开主界面验证主密码，连续输错密码触发冷却退避");
         add_feat(L"无损与体检修复：", L"绝不改动原始文件内容，内置保护区健康体检与安全修复", false);
@@ -1899,27 +1955,35 @@ void win_show_about_dialog(HWND parent, const std::string& current_hotkey) {
 
         int measured = dlg.measure_rich_box_logical_h(feat_re);
         if (measured > feat_h) feat_h = measured;
-        dlg.move_ctrl(feat_re, 32, card_y + 10, inner_w, feat_h);
+        dlg.move_ctrl(feat_re, 36, card_y + 11, inner_w, feat_h);
     } else {
         const std::wstring fallback_feat =
             L"核心功能：\n"
-            L"• 双重密码体系：支持统一主密码与单目录独立密码，可自由改密与切换\n"
-            L"• 快捷验证解锁：受保护目录无角标独立标识，双击直接弹窗输入密码解锁\n"
-            L"• 批量拖拽加锁：支持单个或多个文件夹直接拖入主窗口快速批量锁定\n"
-            L"• 全锁与防占用：支持 " + whk + L" 一键全锁与闲置回锁，被占用时智能跳过\n"
-            L"• 界面与防爆破：可选打开主界面验证主密码，连续输错密码触发冷却退避\n"
-            L"• 无损与体检修复：绝不改动原始文件内容，内置保护区健康体检与安全修复";
+            L"✓ 双重密码体系：支持统一主密码与单目录独立密码，可自由改密与切换\n"
+            L"✓ 快捷验证解锁：受保护目录无角标独立标识，双击直接弹窗输入密码解锁\n"
+            L"✓ 批量拖拽加锁：支持单个或多个文件夹直接拖入主窗口快速批量锁定\n"
+            L"✓ 全锁与防占用：支持 " + whk + L" 一键全锁与闲置回锁，被占用时智能跳过\n"
+            L"✓ 界面与防爆破：可选打开主界面验证主密码，连续输错密码触发冷却退避\n"
+            L"✓ 无损与体检修复：绝不改动原始文件内容，内置保护区健康体检与安全修复";
         int measured = dlg.measure_label_logical_h(fallback_feat, inner_w, false);
         if (measured > feat_h) feat_h = measured;
-        HWND lbl = dlg.add_label(fallback_feat, 32, card_y + 10, inner_w, feat_h);
+        HWND lbl = dlg.add_label(fallback_feat, 36, card_y + 11, inner_w, feat_h);
         dlg.bind_ctrl_card(lbl, card_idx);
     }
 
-    const int card_h = feat_h + 20;
+    const int card_h = feat_h + 22;
     dlg.set_card_height(card_idx, card_h);
 
     const int ok_y = card_y + card_h + 14;
-    HWND ok_btn = dlg.add_button(L"确定", dlg_w - 20 - 86, ok_y, 86, 28, IDOK, true);
+    dlg.add_styled_label(L"● 纯本地离线运行 · 绝不改动原始文件 · Copyright © 2026 yinchaow",
+                         22, ok_y + 5, 480, 20, kColorMuted, false);
+    HWND ok_btn = dlg.add_button(L"确定", dlg_w - 22 - 88, ok_y, 88, 28, IDOK, true);
+    dlg.on_command = [&](int id) {
+        if (id == 7003) {
+            copy_text_to_clipboard(dlg.hwnd, L"https://github.com/yinchaow/DirLocker");
+            SetWindowTextW(copy_url_btn, L"已复制");
+        }
+    };
     dlg.resize_client(dlg_w, ok_y + 28 + 16, parent, true);
     dlg.run_modal(parent, ok_btn);
 }

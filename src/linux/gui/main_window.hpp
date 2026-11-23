@@ -86,6 +86,8 @@ private:
     QTableWidget* table_ = nullptr;
     DirTableDelegate* delegate_ = nullptr;
     EmptyTableOverlay* empty_overlay_ = nullptr;
+    QLabel* panel_count_label_ = nullptr;
+    QLabel* summary_pill_label_ = nullptr;
     QLabel* summary_label_ = nullptr;
     QLabel* policy_label_ = nullptr;
     QPushButton* lock_all_btn_ = nullptr;

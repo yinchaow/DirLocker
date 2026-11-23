@@ -164,8 +164,8 @@ MasterPasswordDialog::MasterPasswordDialog(bool requireOld, QWidget* parent)
     layout->setSizeConstraint(QLayout::SetMinimumSize);
     auto* hint = new QLabel(
         requireOld
-            ? QStringLiteral("<span style=\"color:#1f2328;\">修改主密码后，所有采用</span><b style=\"color:#0d47a1;\">主密码</b><span style=\"color:#1f2328;\">方式的目录将自动使用新密码。</span>")
-            : QStringLiteral("<span style=\"color:#1f2328;\">首次使用目录密匣，请先设置</span><b style=\"color:#0d47a1;\">主密码</b><span style=\"color:#1f2328;\">（至少 4 位），作为默认解锁密码。</span>"),
+            ? QStringLiteral("<span style=\"color:#1f2328;\">修改主密码后，所有采用</span><b style=\"color:#0067c0;\">主密码</b><span style=\"color:#1f2328;\">方式的目录将自动使用新密码。</span>")
+            : QStringLiteral("<span style=\"color:#1f2328;\">首次使用目录密匣，请先设置</span><b style=\"color:#0067c0;\">主密码</b><span style=\"color:#1f2328;\">（至少 4 位），作为默认解锁密码。</span>"),
         this);
     hint->setTextFormat(Qt::RichText);
     hint->setWordWrap(true);
@@ -333,8 +333,8 @@ UnlockDirDialog::UnlockDirDialog(const QString& dirPath, bool useCustomPassword,
 
     auto* modeLabel = new QLabel(
         useCustomPassword
-            ? QStringLiteral("<span style=\"color:#5f6368;\">密码类型：</span><b style=\"color:#0d47a1;\">独立密码</b>")
-            : QStringLiteral("<span style=\"color:#5f6368;\">密码类型：</span><b style=\"color:#0d47a1;\">主密码</b>"),
+            ? QStringLiteral("<span style=\"color:#5f6368;\">密码类型：</span><b style=\"color:#0067c0;\">独立密码</b>")
+            : QStringLiteral("<span style=\"color:#5f6368;\">密码类型：</span><b style=\"color:#0067c0;\">主密码</b>"),
         this);
     modeLabel->setTextFormat(Qt::RichText);
     layout->addWidget(modeLabel);
@@ -399,8 +399,8 @@ ChangeDirPasswordDialog::ChangeDirPasswordDialog(const QString& dirPath, bool cu
 
     auto* modeLabel = new QLabel(
         currentlyCustom
-            ? QStringLiteral("<span style=\"color:#5f6368;\">变更方式：</span><b style=\"color:#1f2328;\">独立密码</b><span style=\"color:#5f6368;\">  →  </span><b style=\"color:#0d47a1;\">主密码</b>")
-            : QStringLiteral("<span style=\"color:#5f6368;\">变更方式：</span><b style=\"color:#1f2328;\">主密码</b><span style=\"color:#5f6368;\">  →  </span><b style=\"color:#0d47a1;\">独立密码</b>"),
+            ? QStringLiteral("<span style=\"color:#5f6368;\">变更方式：</span><b style=\"color:#1f2328;\">独立密码</b><span style=\"color:#5f6368;\">  →  </span><b style=\"color:#0067c0;\">主密码</b>")
+            : QStringLiteral("<span style=\"color:#5f6368;\">变更方式：</span><b style=\"color:#1f2328;\">主密码</b><span style=\"color:#5f6368;\">  →  </span><b style=\"color:#0067c0;\">独立密码</b>"),
         this);
     modeLabel->setTextFormat(Qt::RichText);
     layout->addWidget(modeLabel);
@@ -479,7 +479,7 @@ EditCustomPasswordDialog::EditCustomPasswordDialog(const QString& dirPath, QWidg
     layout->addWidget(pathLabel);
 
     auto* modeLabel = new QLabel(
-        QStringLiteral("<span style=\"color:#5f6368;\">当前方式：</span><b style=\"color:#0d47a1;\">独立密码</b><span style=\"color:#5f6368;\">（仅修改本目录的独立密码，不影响主密码）</span>"),
+        QStringLiteral("<span style=\"color:#5f6368;\">当前方式：</span><b style=\"color:#0067c0;\">独立密码</b><span style=\"color:#5f6368;\">（仅修改本目录的独立密码，不影响主密码）</span>"),
         this);
     modeLabel->setTextFormat(Qt::RichText);
     modeLabel->setWordWrap(true);
@@ -709,7 +709,7 @@ HealthCheckDialog::HealthCheckDialog(const QString& masterPw, QWidget* parent)
 
     auto* card = new QFrame(this);
     card->setStyleSheet(QStringLiteral(
-        "QFrame { background-color:#f6f8fa; border:1px solid #d0d7de; border-radius:6px; }"));
+        "QFrame { background-color:#ffffff; border:1px solid #d8e1ec; border-radius:10px; }"));
     auto* cardLayout = new QHBoxLayout(card);
     cardLayout->setContentsMargins(12, 10, 12, 10);
     summary_label_ = new QLabel(QStringLiteral("正在体检保护区与托管目录状态..."), card);
@@ -800,7 +800,7 @@ void HealthCheckDialog::runScan() {
         QString color = QStringLiteral("#b45309");
         if (auto_rep) {
             tag = QStringLiteral("[可自动修复]");
-            color = QStringLiteral("#0d47a1");
+            color = QStringLiteral("#0067c0");
         } else if (kind == "unmounted_disk") {
             tag = QStringLiteral("[磁盘未挂载]");
             color = QStringLiteral("#5f6368");
@@ -1062,7 +1062,7 @@ void FolderPickerDialog::updateSelectionPreview() {
         chosen_dir_ = current_dir_;
     }
     preview_label_->setText(
-        QStringLiteral("<span style=\"color:#5f6368;\">将锁定目录：</span><b style=\"color:#0d47a1;\">") +
+        QStringLiteral("<span style=\"color:#5f6368;\">将锁定目录：</span><b style=\"color:#0067c0;\">") +
         chosen_dir_.toHtmlEscaped() + QStringLiteral("</b>"));
     ok_btn_->setEnabled(!chosen_dir_.isEmpty());
 }

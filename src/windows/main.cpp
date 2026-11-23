@@ -51,8 +51,6 @@ enum ControlId {
     IDC_BTN_ABOUT,
     IDC_BTN_HEALTH,
     IDC_LIST_DIRS,
-    IDC_STATUS_LABEL,
-    IDC_POLICY_LABEL,
     IDM_TRAY_OPEN = 201,
     IDM_TRAY_LOCK_ALL,
     IDM_TRAY_SETTINGS,
@@ -77,25 +75,32 @@ struct WinApp {
     HWND list = nullptr;
     HWND empty_overlay = nullptr;
     HWND search_edit = nullptr;
-    HWND status_label = nullptr;
-    HWND policy_label = nullptr;
     HWND list_tip = nullptr;
     HWND hovered_btn = nullptr;
     HFONT font = nullptr;
     HFONT bold_font = nullptr;
     HFONT small_font = nullptr;
+    HFONT mono_small_font = nullptr;
     HBRUSH bg_brush = nullptr;
     HBRUSH card_brush = nullptr;
+    HBRUSH search_brush = nullptr;
     HICON icon = nullptr;
     HICON folder_lock_icon = nullptr;
     HICON folder_plain_icon = nullptr;
-    RECT search_rc{};
+    RECT cmd_bar_rc{};
+    RECT search_box_rc{};
+    RECT search_icon_rc{};
     RECT list_card_rc{};
+    RECT panel_hdr_rc{};
+    RECT status_strip_rc{};
     bool search_focused = false;
-    int status_line_y = 0;
     int dpi = 96;
     UINT taskbar_created_msg = 0;
     UINT quit_silent_msg = 0;
+
+    std::wstring summary_pill_str;
+    std::wstring status_left_str;
+    std::wstring status_right_str;
 
     WNDPROC orig_list_proc = nullptr;
     int hover_row = -1;
@@ -300,27 +305,31 @@ void rebuild_list_view(WinApp& app) {
     update_empty_overlay_layout(app);
     InvalidateRect(app.list, nullptr, TRUE);
 
-    std::wstring summary = L"受管目录 " + std::to_wstring(entries.size()) +
-                           L" 个 · 已锁定 " + std::to_wstring(locked_cnt) +
+    app.summary_pill_str = L"已锁定 " + std::to_wstring(locked_cnt) +
                            L" · 已解锁 " + std::to_wstring(unlocked_cnt);
+    app.status_left_str = L"受管目录 " + std::to_wstring(entries.size()) +
+                          L" 个 · 已锁定 " + std::to_wstring(locked_cnt) +
+                          L" · 已解锁 " + std::to_wstring(unlocked_cnt);
     if (!filter.empty()) {
-        summary += L"（筛选显示 " + std::to_wstring(app.visible_entry_indices.size()) + L" 项）";
+        app.status_left_str += L"（筛选显示 " + std::to_wstring(app.visible_entry_indices.size()) + L" 项）";
     }
-    SetWindowTextW(app.status_label, summary.c_str());
 
-    if (app.policy_label) {
-        int mins = app.store->settings().auto_relock_minutes;
-        std::wstring whk = utf8_to_wide(
-            HotkeySpec::normalize(app.registered_hotkey.empty() ? app.store->settings().hotkey
-                                                                : app.registered_hotkey,
-                                  "Ctrl+Alt+K"));
-        std::wstring hk = app.hotkey_ok ? (L"热键 " + whk + L" 已就绪")
-                                        : (L"托盘保护运行中（" + whk + L" 未注册）");
-        std::wstring idle = mins > 0
-            ? (L"闲置 " + std::to_wstring(mins) + L" 分钟自动回锁")
-            : L"闲置回锁已关闭";
-        std::wstring policy = hk + L"  |  " + idle;
-        SetWindowTextW(app.policy_label, policy.c_str());
+    int mins = app.store->settings().auto_relock_minutes;
+    std::wstring whk = utf8_to_wide(
+        HotkeySpec::normalize(app.registered_hotkey.empty() ? app.store->settings().hotkey
+                                                            : app.registered_hotkey,
+                              "Ctrl+Alt+K"));
+    std::wstring hk = app.hotkey_ok ? (L"热键 " + whk + L" 已就绪")
+                                    : (L"热键 " + whk + L" 未注册");
+    std::wstring idle = mins > 0
+        ? (L"闲置 " + std::to_wstring(mins) + L" 分钟自动回锁")
+        : L"闲置回锁已关闭";
+    std::wstring guard = app.store->settings().require_master_on_open ? L"开窗需验密" : L"防占用保护开启";
+    app.status_right_str = hk + L"  |  " + idle + L"  |  " + guard;
+
+    if (app.hwnd) {
+        InvalidateRect(app.hwnd, &app.panel_hdr_rc, FALSE);
+        InvalidateRect(app.hwnd, &app.status_strip_rc, FALSE);
     }
 
     add_or_update_tray(app, true);
@@ -1156,7 +1165,7 @@ void do_quit(WinApp& app) {
     DestroyWindow(app.hwnd);
 }
 
-constexpr int kWinCornerRadius = 6;
+constexpr int kWinCornerRadius = 8;
 
 Gdiplus::Color gp_color(COLORREF c, BYTE a = 255) {
     return Gdiplus::Color(a, GetRValue(c), GetGValue(c), GetBValue(c));
@@ -1210,24 +1219,24 @@ WinCellLayout compute_win_cell_layout(RECT cell, int col, bool locked, int dpi) 
     WinCellLayout lay{};
     int cy = cell.top + (cell.bottom - cell.top) / 2;
     if (col == 1) {
-        int sz = S(28);
+        int sz = S(30);
         int l = cell.left + ((cell.right - cell.left) - sz) / 2;
         int t = cy - sz / 2;
         lay.status_chip = RECT{l, t, l + sz, t + sz};
     } else if (col == 2) {
-        int w = S(88);
+        int w = S(92);
         int max_w = (cell.right - cell.left) - S(10);
         if (w > max_w) w = max_w;
-        int h = S(28);
+        int h = S(30);
         int l = cell.left + ((cell.right - cell.left) - w) / 2;
         int t = cy - h / 2;
         lay.tag_rect = RECT{l, t, l + w, t + h};
     } else if (col == 3) {
-        int action_w = S(64);
-        int icon_w = S(28);
+        int action_w = S(66);
+        int icon_w = S(30);
         int gap = S(6);
-        int total_w = icon_w + gap + action_w + gap + icon_w;  // S(132)
-        int h = S(28);
+        int total_w = icon_w + gap + action_w + gap + icon_w;  // S(138)
+        int h = S(30);
         int start_x = cell.left + ((cell.right - cell.left) - total_w) / 2;
         if (start_x < cell.left + S(6)) start_x = cell.left + S(6);
         int t = cy - h / 2;
@@ -1255,9 +1264,9 @@ int hit_win_cell_slot(RECT cell, int col, bool locked, POINT pt, int dpi) {
 }
 
 void draw_status_lock_chip(Gdiplus::Graphics& g, RECT rc, bool locked, int dpi) {
-    COLORREF bg = locked ? RGB(227, 242, 253) : RGB(232, 245, 233);
-    COLORREF border = locked ? RGB(144, 202, 249) : RGB(165, 214, 167);
-    COLORREF fg = locked ? RGB(13, 71, 161) : RGB(27, 94, 32);
+    COLORREF bg = locked ? RGB(232, 243, 252) : RGB(230, 246, 236);
+    COLORREF border = locked ? RGB(147, 197, 253) : RGB(163, 222, 192);
+    COLORREF fg = locked ? RGB(0, 103, 192) : RGB(15, 123, 67);
     gp_draw_round_rect(g, rc, kWinCornerRadius, bg, border, dpi);
 
     Gdiplus::REAL s = static_cast<Gdiplus::REAL>(dpi) / 96.0f;
@@ -1358,13 +1367,13 @@ void draw_dir_list_item(WinApp& app, const DRAWITEMSTRUCT* dis) {
     const bool selected = (dis->itemState & ODS_SELECTED) != 0;
     const int vis_i = static_cast<int>(vis);
     const bool row_hovered = (app.hover_row == vis_i);
-    COLORREF row_bg = selected ? RGB(235, 243, 254) : (row_hovered ? RGB(246, 248, 250) : RGB(255, 255, 255));
+    COLORREF row_bg = selected ? RGB(233, 243, 252) : (row_hovered ? RGB(244, 248, 254) : RGB(255, 255, 255));
     HBRUSH row_br = CreateSolidBrush(row_bg);
     FillRect(mem, &lrc, row_br);
     DeleteObject(row_br);
 
     // Subtle bottom hairline
-    HPEN sep_pen = CreatePen(PS_SOLID, 1, RGB(238, 241, 244));
+    HPEN sep_pen = CreatePen(PS_SOLID, 1, RGB(236, 241, 247));
     HPEN old_pen = static_cast<HPEN>(SelectObject(mem, sep_pen));
     MoveToEx(mem, 0, h - 1, nullptr);
     LineTo(mem, w, h - 1);
@@ -1372,10 +1381,13 @@ void draw_dir_list_item(WinApp& app, const DRAWITEMSTRUCT* dis) {
     DeleteObject(sep_pen);
 
     if (selected) {
-        RECT bar{0, S(4), S(3), h - S(4)};
-        HBRUSH bar_br = CreateSolidBrush(RGB(13, 71, 161));
-        FillRect(mem, &bar, bar_br);
-        DeleteObject(bar_br);
+        Gdiplus::Graphics gb(mem);
+        gb.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        Gdiplus::GraphicsPath pill;
+        Gdiplus::REAL s = static_cast<Gdiplus::REAL>(app.dpi) / 96.0f;
+        build_round_rect_path(pill, 2.0f * s, 8.0f * s, 3.0f * s, static_cast<Gdiplus::REAL>(h) - 16.0f * s, 1.5f * s);
+        Gdiplus::SolidBrush pbr(Gdiplus::Color(255, 0, 103, 192));
+        gb.FillPath(&pbr, &pill);
     }
 
     int c0_w = ListView_GetColumnWidth(app.list, 0);
@@ -1402,15 +1414,15 @@ void draw_dir_list_item(WinApp& app, const DRAWITEMSTRUCT* dis) {
             wpath += L"  ·  [原位权限锁 · 占用解除后自动迁入保护区]";
         }
 
-        RECT nr{text_x, S(7), text_r, S(27)};
+        RECT nr{text_x, S(8), text_r, S(32)};
         HFONT old_f = static_cast<HFONT>(SelectObject(mem, app.bold_font ? app.bold_font : app.font));
-        SetTextColor(mem, RGB(31, 35, 40));
+        SetTextColor(mem, RGB(15, 23, 42));
         DrawTextW(mem, wname.c_str(), static_cast<int>(wname.size()), &nr,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
-        RECT pr{text_x, S(27), text_r, h - S(7)};
+        RECT pr{text_x, S(32), text_r, h - S(8)};
         SelectObject(mem, app.small_font ? app.small_font : app.font);
-        SetTextColor(mem, RGB(95, 99, 104));
+        SetTextColor(mem, RGB(100, 116, 139));
         DrawTextW(mem, wpath.c_str(), static_cast<int>(wpath.size()), &pr,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
         SelectObject(mem, old_f);
@@ -1433,13 +1445,13 @@ void draw_dir_list_item(WinApp& app, const DRAWITEMSTRUCT* dis) {
 
     COLORREF act_bg, act_bd, act_fg;
     if (e.locked) {
-        act_bg = hov_op1 ? RGB(220, 242, 223) : RGB(232, 245, 233);
-        act_bd = hov_op1 ? RGB(46, 125, 50) : RGB(129, 199, 132);
-        act_fg = RGB(27, 94, 32);
+        act_bg = hov_op1 ? RGB(214, 242, 225) : RGB(230, 246, 236);
+        act_bd = hov_op1 ? RGB(15, 123, 67) : RGB(134, 214, 174);
+        act_fg = RGB(15, 123, 67);
     } else {
-        act_bg = hov_op1 ? RGB(220, 235, 250) : RGB(235, 243, 254);
-        act_bd = hov_op1 ? RGB(25, 118, 210) : RGB(144, 202, 249);
-        act_fg = RGB(13, 71, 161);
+        act_bg = hov_op1 ? RGB(214, 233, 252) : RGB(232, 243, 252);
+        act_bd = hov_op1 ? RGB(0, 103, 192) : RGB(147, 197, 253);
+        act_fg = RGB(0, 103, 192);
     }
 
     {
@@ -1504,25 +1516,26 @@ void draw_modern_button(WinApp& app, const DRAWITEMSTRUCT* dis) {
     const bool is_primary = (id == IDC_BTN_ADD);
     const bool is_tonal_accent = (id == IDC_BTN_LOCK_ALL);
 
-    if (app.bg_brush) FillRect(dis->hDC, &rc, app.bg_brush);
+    // All top bar buttons sit inside the elevated white Fluent command bar
+    if (app.card_brush) FillRect(dis->hDC, &rc, app.card_brush);
 
     COLORREF bg, border, fg;
     if (disabled) {
         bg = RGB(246, 248, 250);
         border = RGB(225, 228, 232);
-        fg = RGB(154, 160, 166);
+        fg = RGB(148, 163, 184);
     } else if (is_primary) {
-        bg = pressed ? RGB(9, 53, 122) : (hovered ? RGB(21, 101, 192) : RGB(13, 71, 161));
+        bg = pressed ? RGB(0, 82, 158) : (hovered ? RGB(0, 95, 184) : RGB(0, 103, 192));
         border = bg;
         fg = RGB(255, 255, 255);
     } else if (is_tonal_accent) {
-        bg = pressed ? RGB(203, 226, 251) : (hovered ? RGB(220, 235, 250) : RGB(235, 243, 254));
-        border = pressed ? RGB(13, 71, 161) : (hovered ? RGB(25, 118, 210) : RGB(144, 202, 249));
-        fg = RGB(13, 71, 161);
+        bg = pressed ? RGB(197, 225, 250) : (hovered ? RGB(216, 235, 251) : RGB(232, 243, 252));
+        border = pressed ? RGB(0, 103, 192) : (hovered ? RGB(0, 103, 192) : RGB(147, 197, 253));
+        fg = RGB(0, 103, 192);
     } else {
-        bg = pressed ? RGB(235, 236, 240) : (hovered ? RGB(243, 244, 246) : RGB(255, 255, 255));
-        border = pressed ? RGB(175, 184, 193) : (hovered ? RGB(175, 184, 193) : RGB(208, 215, 222));
-        fg = RGB(31, 35, 40);
+        bg = pressed ? RGB(235, 243, 252) : (hovered ? RGB(244, 248, 254) : RGB(255, 255, 255));
+        border = (hovered || pressed) ? RGB(147, 197, 253) : RGB(212, 221, 232);
+        fg = (hovered || pressed) ? RGB(0, 103, 192) : RGB(51, 65, 85);
     }
 
     {
@@ -1875,17 +1888,17 @@ LRESULT CALLBACK EmptyOverlayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     build_round_rect_path(box, static_cast<Gdiplus::REAL>(bx),
                                           static_cast<Gdiplus::REAL>(by),
                                           static_cast<Gdiplus::REAL>(bw),
-                                          static_cast<Gdiplus::REAL>(bh), 10.0f * s);
-                    Gdiplus::SolidBrush fill_br(Gdiplus::Color(255, 248, 250, 252));
+                                          static_cast<Gdiplus::REAL>(bh), 14.0f * s);
+                    Gdiplus::SolidBrush fill_br(Gdiplus::Color(255, 246, 250, 255));
                     g.FillPath(&fill_br, &box);
-                    Gdiplus::Pen dash_pen(Gdiplus::Color(255, 203, 213, 225), 1.2f * s);
+                    Gdiplus::Pen dash_pen(Gdiplus::Color(255, 196, 212, 232), 1.2f * s);
                     dash_pen.SetDashStyle(Gdiplus::DashStyleDash);
                     g.DrawPath(&dash_pen, &box);
 
                     Gdiplus::REAL cx = bx + bw * 0.5f;
                     Gdiplus::REAL cy = by + 50.0f * s;
-                    Gdiplus::REAL cr_rad = 24.0f * s;
-                    Gdiplus::SolidBrush badge_br(Gdiplus::Color(255, 235, 243, 254));
+                    Gdiplus::REAL cr_rad = 25.0f * s;
+                    Gdiplus::SolidBrush badge_br(Gdiplus::Color(255, 232, 243, 252));
                     g.FillEllipse(&badge_br, cx - cr_rad, cy - cr_rad, cr_rad * 2.0f, cr_rad * 2.0f);
 
                     Gdiplus::PointF fpts[6] = {
@@ -1895,8 +1908,8 @@ LRESULT CALLBACK EmptyOverlayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     };
                     Gdiplus::GraphicsPath fp;
                     fp.AddPolygon(fpts, 6);
-                    Gdiplus::SolidBrush ffill(Gdiplus::Color(255, 219, 234, 254));
-                    Gdiplus::Pen fpen(Gdiplus::Color(255, 13, 71, 161), 1.8f * s);
+                    Gdiplus::SolidBrush ffill(Gdiplus::Color(255, 214, 234, 252));
+                    Gdiplus::Pen fpen(Gdiplus::Color(255, 0, 103, 192), 1.8f * s);
                     fpen.SetStartCap(Gdiplus::LineCapRound);
                     fpen.SetEndCap(Gdiplus::LineCapRound);
                     fpen.SetLineJoin(Gdiplus::LineJoinRound);
@@ -1905,28 +1918,28 @@ LRESULT CALLBACK EmptyOverlayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
                     Gdiplus::GraphicsPath lock_body;
                     build_round_rect_path(lock_body, cx - 4.0f * s, cy + 0.5f * s, 8.0f * s, 6.0f * s, 1.5f * s);
-                    Gdiplus::SolidBrush lbr(Gdiplus::Color(255, 13, 71, 161));
+                    Gdiplus::SolidBrush lbr(Gdiplus::Color(255, 0, 103, 192));
                     g.FillPath(&lbr, &lock_body);
-                    Gdiplus::Pen spen(Gdiplus::Color(255, 13, 71, 161), 1.4f * s);
+                    Gdiplus::Pen spen(Gdiplus::Color(255, 0, 103, 192), 1.4f * s);
                     spen.SetStartCap(Gdiplus::LineCapRound);
                     spen.SetEndCap(Gdiplus::LineCapRound);
                     g.DrawArc(&spen, cx - 2.6f * s, cy - 3.2f * s, 5.2f * s, 5.2f * s, 180.0f, 180.0f);
                 }
 
                 SetBkMode(mem, TRANSPARENT);
-                HFONT title_f = create_ui_font(app->dpi, 11, true);
+                HFONT title_f = create_ui_font(app->dpi, 12, true);
                 HFONT old_f = static_cast<HFONT>(SelectObject(mem, title_f ? title_f : app->bold_font));
-                SetTextColor(mem, RGB(31, 35, 40));
-                RECT trc{bx + S(16), by + S(84), bx + bw - S(16), by + S(112)};
+                SetTextColor(mem, RGB(15, 23, 42));
+                RECT trc{bx + S(16), by + S(84), bx + bw - S(16), by + S(114)};
                 const wchar_t* title = filtered_empty ? L"未找到匹配的受管目录" : L"将要保护的目录拖放到此处";
                 DrawTextW(mem, title, -1, &trc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
-                SelectObject(mem, app->font);
-                SetTextColor(mem, RGB(95, 99, 104));
-                RECT src{bx + S(16), by + S(116), bx + bw - S(16), by + bh - S(12)};
+                SelectObject(mem, app->small_font ? app->small_font : app->font);
+                SetTextColor(mem, RGB(100, 116, 139));
+                RECT src{bx + S(16), by + S(118), bx + bw - S(16), by + bh - S(10)};
                 const wchar_t* sub = filtered_empty
                     ? L"尝试修改或清空上方搜索栏关键字"
-                    : L"或点击左上角「+ 添加并锁定」 · 原目录内文件绝不被修改或加密";
+                    : L"或点击左上角「＋ 添加并锁定」 · 原目录内文件绝不被修改或加密";
                 DrawTextW(mem, sub, -1, &src, DT_CENTER | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
                 SelectObject(mem, old_f);
                 if (title_f) DeleteObject(title_f);
@@ -1975,9 +1988,9 @@ void update_empty_overlay_layout(WinApp& app) {
 void adjust_list_columns(WinApp& app) {
     if (!app.list) return;
     auto S = [&](int px) { return scale_dpi(px, app.dpi); };
-    int c1_w = S(76);
-    int c2_w = S(112);
-    int c3_w = S(156);
+    int c1_w = S(78);
+    int c2_w = S(114);
+    int c3_w = S(160);
     // Shrink col 0 briefly before reading GetClientRect so stale horizontal widths cannot affect scrollbar metrics.
     ListView_SetColumnWidth(app.list, 0, S(120));
     ListView_SetColumnWidth(app.list, 1, c1_w);
@@ -1995,70 +2008,79 @@ void adjust_list_columns(WinApp& app) {
 
 void layout_main_window(WinApp& app, int width, int height) {
     auto S = [&](int px) { return scale_dpi(px, app.dpi); };
-    int pad = S(14);
-    int top_y = S(12);
-    int btn_h = S(30);
-    int gap = S(8);
+    const int pad = S(14);
+    const int gap = S(10);
 
-    // Right buttons: 设置 ▾, 帮助 ▾
-    int rx = width - pad;
-    int bw_help = S(76);
+    // 1. Elevated Fluent Command Bar (Add + LockAll + Search | Settings + Help)
+    const int cmd_h = S(48);
+    app.cmd_bar_rc = RECT{pad, pad, width - pad, pad + cmd_h};
+
+    const int btn_h = S(32);
+    const int btn_y = pad + (cmd_h - btn_h) / 2;
+    const int bgap = S(8);
+
+    // Right buttons inside command bar: 设置 ▾, 帮助 ▾
+    int rx = app.cmd_bar_rc.right - S(10);
+    int bw_help = S(78);
     rx -= bw_help;
-    MoveWindow(GetDlgItem(app.hwnd, IDC_BTN_MENU_HELP), rx, top_y, bw_help, btn_h, TRUE);
-    rx -= gap;
+    MoveWindow(GetDlgItem(app.hwnd, IDC_BTN_MENU_HELP), rx, btn_y, bw_help, btn_h, TRUE);
+    rx -= bgap;
 
-    int bw_settings = S(76);
+    int bw_settings = S(78);
     rx -= bw_settings;
-    MoveWindow(GetDlgItem(app.hwnd, IDC_BTN_MENU_SETTINGS), rx, top_y, bw_settings, btn_h, TRUE);
-    rx -= gap;
+    MoveWindow(GetDlgItem(app.hwnd, IDC_BTN_MENU_SETTINGS), rx, btn_y, bw_settings, btn_h, TRUE);
+    rx -= S(12);
 
-    // Left buttons + rounded search box
-    int x = pad;
-    int bw_add = S(124);
-    MoveWindow(GetDlgItem(app.hwnd, IDC_BTN_ADD), x, top_y, bw_add, btn_h, TRUE);
-    x += bw_add + gap;
+    // Left buttons + embedded Fluent search box
+    int x = app.cmd_bar_rc.left + S(10);
+    int bw_add = S(132);
+    MoveWindow(GetDlgItem(app.hwnd, IDC_BTN_ADD), x, btn_y, bw_add, btn_h, TRUE);
+    x += bw_add + bgap;
 
-    int bw_lock_all = S(164);
+    int bw_lock_all = S(176);
     if (HWND lock_btn = GetDlgItem(app.hwnd, IDC_BTN_LOCK_ALL)) {
         std::wstring lock_txt = get_window_text_w_main(lock_btn);
         if (!lock_txt.empty()) {
             HDC hdc = GetDC(app.hwnd);
             if (hdc) {
-                HFONT old_f = app.font ? static_cast<HFONT>(SelectObject(hdc, app.font)) : nullptr;
+                HFONT old_f = app.bold_font ? static_cast<HFONT>(SelectObject(hdc, app.bold_font)) : nullptr;
                 SIZE sz{};
                 GetTextExtentPoint32W(hdc, lock_txt.c_str(), static_cast<int>(lock_txt.size()), &sz);
                 if (old_f) SelectObject(hdc, old_f);
                 ReleaseDC(app.hwnd, hdc);
-                int measured = sz.cx + S(26);
+                int measured = sz.cx + S(28);
                 if (measured > bw_lock_all) bw_lock_all = measured;
-                if (bw_lock_all > S(228)) bw_lock_all = S(228);
+                if (bw_lock_all > S(248)) bw_lock_all = S(248);
             }
         }
-        MoveWindow(lock_btn, x, top_y, bw_lock_all, btn_h, TRUE);
+        MoveWindow(lock_btn, x, btn_y, bw_lock_all, btn_h, TRUE);
     }
-    x += bw_lock_all + gap;
+    x += bw_lock_all + bgap;
 
     int search_w = rx - x;
-    if (search_w > S(240)) search_w = S(240);
-    if (search_w < S(100)) search_w = S(100);
-    app.search_rc = RECT{x, top_y, x + search_w, top_y + btn_h};
-    int inner_h = S(17);
-    MoveWindow(app.search_edit, x + S(10), top_y + (btn_h - inner_h) / 2, search_w - S(20), inner_h, TRUE);
+    if (search_w > S(270)) search_w = S(270);
+    if (search_w < S(120)) search_w = S(120);
+    app.search_box_rc = RECT{x, btn_y, x + search_w, btn_y + btn_h};
+    app.search_icon_rc = RECT{x + S(10), btn_y + (btn_h - S(15)) / 2, x + S(25), btn_y + (btn_h + S(15)) / 2};
+    int edit_x = app.search_icon_rc.right + S(7);
+    int inner_h = S(19);
+    MoveWindow(app.search_edit, edit_x, btn_y + (btn_h - inner_h) / 2,
+               (app.search_box_rc.right - S(8)) - edit_x, inner_h, TRUE);
 
-    // Compact bottom status bar
-    int status_h = S(20);
-    int bottom_y = height - S(10) - status_h;
-    app.status_line_y = bottom_y - S(6);
-    int status_w = (width - 2 * pad) / 2;
-    int policy_w = width - 2 * pad - status_w - gap;
-    MoveWindow(app.status_label, pad, bottom_y, status_w, status_h, TRUE);
-    MoveWindow(app.policy_label, pad + status_w + gap, bottom_y, policy_w, status_h, TRUE);
+    // 2. Bottom Status Strip on Mica Canvas
+    const int status_h = S(22);
+    app.status_strip_rc = RECT{pad + S(2), height - S(10) - status_h, width - pad - S(2), height - S(10)};
 
-    int list_top = top_y + btn_h + S(10);
-    int list_h = app.status_line_y - S(8) - list_top;
-    if (list_h < S(140)) list_h = S(140);
+    // 3. Layered Mica Directory Table Panel with integrated header strip
+    int list_top = app.cmd_bar_rc.bottom + gap;
+    int list_h = (app.status_strip_rc.top - S(8)) - list_top;
+    if (list_h < S(160)) list_h = S(160);
     app.list_card_rc = RECT{pad, list_top, width - pad, list_top + list_h};
-    MoveWindow(app.list, pad + S(3), list_top + S(2), (width - 2 * pad) - S(6), list_h - S(4), TRUE);
+    const int hdr_h = S(38);
+    app.panel_hdr_rc = RECT{pad, list_top, width - pad, list_top + hdr_h};
+
+    MoveWindow(app.list, pad + S(2), list_top + hdr_h + S(1),
+               (width - 2 * pad) - S(4), list_h - hdr_h - S(5), TRUE);
 
     adjust_list_columns(app);
     update_empty_overlay_layout(app);
@@ -2149,11 +2171,16 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_CREATE: {
             app->dpi = get_window_dpi(hwnd);
             auto S = [&](int px) { return scale_dpi(px, app->dpi); };
-            app->font = create_ui_font(app->dpi, 9, false);
-            app->bold_font = create_ui_font(app->dpi, 9, true);
-            app->small_font = create_ui_font(app->dpi, 8, false);
-            app->bg_brush = CreateSolidBrush(RGB(246, 248, 250));
+            app->font = create_ui_font(app->dpi, 10, false);
+            app->bold_font = create_ui_font(app->dpi, 10, true);
+            app->small_font = create_ui_font(app->dpi, 9, false);
+            app->mono_small_font = CreateFontW(
+                -MulDiv(9, app->dpi, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                FIXED_PITCH | FF_MODERN, L"Consolas");
+            app->bg_brush = CreateSolidBrush(RGB(238, 243, 250));
             app->card_brush = CreateSolidBrush(RGB(255, 255, 255));
+            app->search_brush = CreateSolidBrush(RGB(244, 247, 251));
             app->taskbar_created_msg = RegisterWindowMessageW(L"TaskbarCreated");
             app->quit_silent_msg = RegisterWindowMessageW(L"DirLocker_QuitSilent");
 
@@ -2169,7 +2196,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             auto mk_btn = [&](const wchar_t* text, int id) {
                 HWND h = CreateWindowExW(0, L"BUTTON", text,
                                          WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                                         0, 0, 100, 28, hwnd,
+                                         0, 0, 100, 30, hwnd,
                                          reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
                                          GetModuleHandleW(nullptr), nullptr);
                 SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(app->font), TRUE);
@@ -2189,26 +2216,10 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 GetModuleHandleW(nullptr), nullptr);
             SendMessageW(app->search_edit, WM_SETFONT, reinterpret_cast<WPARAM>(app->font), TRUE);
             SendMessageW(app->search_edit, EM_SETCUEBANNER, TRUE,
-                         reinterpret_cast<LPARAM>(L"搜索目录名称或路径..."));
+                         reinterpret_cast<LPARAM>(L"搜索目录名称或路径…"));
 
             mk_btn(L"设置 ▾", IDC_BTN_MENU_SETTINGS);
             mk_btn(L"帮助 ▾", IDC_BTN_MENU_HELP);
-
-            app->status_label = CreateWindowExW(
-                0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
-                0, 0, 200, 20, hwnd,
-                reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_STATUS_LABEL)),
-                GetModuleHandleW(nullptr), nullptr);
-            SendMessageW(app->status_label, WM_SETFONT,
-                         reinterpret_cast<WPARAM>(app->small_font ? app->small_font : app->font), TRUE);
-
-            app->policy_label = CreateWindowExW(
-                0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_NOPREFIX,
-                0, 0, 200, 20, hwnd,
-                reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_POLICY_LABEL)),
-                GetModuleHandleW(nullptr), nullptr);
-            SendMessageW(app->policy_label, WM_SETFONT,
-                         reinterpret_cast<WPARAM>(app->small_font ? app->small_font : app->font), TRUE);
 
             app->list = CreateWindowExW(
                 0, WC_LISTVIEWW, L"",
@@ -2295,14 +2306,14 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (mmi) {
                 int dpi = (app && app->dpi) ? app->dpi : 96;
                 mmi->ptMinTrackSize.x = scale_dpi(760, dpi);
-                mmi->ptMinTrackSize.y = scale_dpi(440, dpi);
+                mmi->ptMinTrackSize.y = scale_dpi(450, dpi);
             }
             return 0;
         }
         case WM_MEASUREITEM: {
             auto* mis = reinterpret_cast<MEASUREITEMSTRUCT*>(lp);
             if (mis && mis->CtlID == IDC_LIST_DIRS) {
-                mis->itemHeight = scale_dpi(54, (app && app->dpi) ? app->dpi : 96);
+                mis->itemHeight = scale_dpi(56, (app && app->dpi) ? app->dpi : 96);
                 return TRUE;
             }
             break;
@@ -2326,30 +2337,143 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             HDC hdc = BeginPaint(hwnd, &ps);
             RECT cr{};
             GetClientRect(hwnd, &cr);
-            if (app->bg_brush) FillRect(hdc, &cr, app->bg_brush);
+            const int cw = cr.right - cr.left;
+            const int ch = cr.bottom - cr.top;
+            if (cw > 0 && ch > 0) {
+                auto S = [&](int px) { return scale_dpi(px, app->dpi); };
+                Gdiplus::REAL s = static_cast<Gdiplus::REAL>(app->dpi) / 96.0f;
 
-            {
-                Gdiplus::Graphics g(hdc);
-                g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-                g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+                HDC mem = CreateCompatibleDC(hdc);
+                HBITMAP bmp = CreateCompatibleBitmap(hdc, cw, ch);
+                HBITMAP old_bmp = static_cast<HBITMAP>(SelectObject(mem, bmp));
 
-                if (app->search_rc.right > app->search_rc.left) {
-                    COLORREF bd = app->search_focused ? RGB(13, 71, 161) : RGB(208, 215, 222);
-                    gp_draw_round_rect(g, app->search_rc, kWinCornerRadius, RGB(255, 255, 255), bd, app->dpi);
+                {
+                    Gdiplus::Graphics g(mem);
+                    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                    g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+
+                    // 1. Windows 11 Fluent Mica luminous pearlescent backdrop
+                    Gdiplus::SolidBrush base_br(Gdiplus::Color(255, 238, 243, 250));
+                    g.FillRectangle(&base_br, 0, 0, cw, ch);
+
+                    auto paint_glow = [&](Gdiplus::REAL cx, Gdiplus::REAL cy, Gdiplus::REAL rx, Gdiplus::REAL ry,
+                                          Gdiplus::Color center_c) {
+                        Gdiplus::GraphicsPath gp;
+                        gp.AddEllipse(cx - rx, cy - ry, rx * 2.0f, ry * 2.0f);
+                        Gdiplus::PathGradientBrush pgb(&gp);
+                        pgb.SetCenterPoint(Gdiplus::PointF(cx, cy));
+                        pgb.SetCenterColor(center_c);
+                        Gdiplus::Color edge(0, center_c.GetR(), center_c.GetG(), center_c.GetB());
+                        INT cnt = 1;
+                        pgb.SetSurroundColors(&edge, &cnt);
+                        g.FillPath(&pgb, &gp);
+                    };
+                    paint_glow(cw * 0.06f, ch * 0.05f, cw * 0.52f, ch * 0.56f, Gdiplus::Color(135, 186, 222, 255));
+                    paint_glow(cw * 0.94f, ch * 0.08f, cw * 0.45f, ch * 0.48f, Gdiplus::Color(95, 212, 206, 255));
+                    paint_glow(cw * 0.50f, ch * 0.98f, cw * 0.50f, ch * 0.48f, Gdiplus::Color(105, 196, 224, 255));
+
+                    // 2. Top Elevated Fluent Command Bar + Embedded Search Box
+                    if (app->cmd_bar_rc.right > app->cmd_bar_rc.left) {
+                        gp_draw_round_rect(g, app->cmd_bar_rc, 12, RGB(255, 255, 255),
+                                           RGB(216, 225, 236), app->dpi, true);
+                    }
+                    if (app->search_box_rc.right > app->search_box_rc.left) {
+                        COLORREF sbg = app->search_focused ? RGB(255, 255, 255) : RGB(244, 247, 251);
+                        COLORREF sbd = app->search_focused ? RGB(0, 103, 192) : RGB(216, 225, 236);
+                        gp_draw_round_rect(g, app->search_box_rc, 8, sbg, sbd, app->dpi, true);
+
+                        Gdiplus::REAL ix = static_cast<Gdiplus::REAL>(app->search_icon_rc.left);
+                        Gdiplus::REAL iy = static_cast<Gdiplus::REAL>(app->search_icon_rc.top);
+                        Gdiplus::Pen spen(Gdiplus::Color(255, 148, 163, 184), 1.5f * s);
+                        spen.SetStartCap(Gdiplus::LineCapRound);
+                        spen.SetEndCap(Gdiplus::LineCapRound);
+                        g.DrawEllipse(&spen, ix + 1.5f * s, iy + 1.5f * s, 7.6f * s, 7.6f * s);
+                        g.DrawLine(&spen, ix + 8.3f * s, iy + 8.3f * s, ix + 12.2f * s, iy + 12.2f * s);
+                    }
+
+                    // 3. Layered Mica Directory Table Panel + Header Strip
+                    if (app->list_card_rc.right > app->list_card_rc.left) {
+                        gp_draw_round_rect(g, app->list_card_rc, 14, RGB(255, 255, 255),
+                                           RGB(216, 225, 236), app->dpi, true);
+                        Gdiplus::Pen hpen(Gdiplus::Color(255, 226, 232, 240), 1.0f);
+                        g.DrawLine(&hpen, static_cast<INT>(app->panel_hdr_rc.left + S(1)),
+                                   static_cast<INT>(app->panel_hdr_rc.bottom),
+                                   static_cast<INT>(app->panel_hdr_rc.right - S(1)),
+                                   static_cast<INT>(app->panel_hdr_rc.bottom));
+                    }
                 }
-                if (app->list_card_rc.right > app->list_card_rc.left) {
-                    gp_draw_round_rect(g, app->list_card_rc, kWinCornerRadius, RGB(255, 255, 255),
-                                       RGB(216, 222, 228), app->dpi);
+
+                SetBkMode(mem, TRANSPARENT);
+                HFONT old_f = static_cast<HFONT>(SelectObject(mem, app->bold_font ? app->bold_font : app->font));
+
+                // Panel Header Strip (受管目录 (N) + Summary Pill + Drag Tip)
+                if (app->panel_hdr_rc.right > app->panel_hdr_rc.left) {
+                    const wchar_t* view_title = L"受管目录";
+                    int px = app->panel_hdr_rc.left + S(14);
+                    int py = app->panel_hdr_rc.top;
+                    int pb = app->panel_hdr_rc.bottom;
+
+                    SIZE tsz{};
+                    GetTextExtentPoint32W(mem, view_title, static_cast<int>(wcslen(view_title)), &tsz);
+                    SetTextColor(mem, RGB(15, 23, 42));
+                    RECT tr{px, py, px + tsz.cx + S(4), pb};
+                    DrawTextW(mem, view_title, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                    px += tsz.cx + S(6);
+
+                    std::wstring cnt_str = L"(" + std::to_wstring(app->visible_entry_indices.size()) + L")";
+                    SelectObject(mem, app->mono_small_font ? app->mono_small_font : app->bold_font);
+                    SIZE csz{};
+                    GetTextExtentPoint32W(mem, cnt_str.c_str(), static_cast<int>(cnt_str.size()), &csz);
+                    SetTextColor(mem, RGB(0, 103, 192));
+                    RECT cr_cnt{px, py, px + csz.cx + S(4), pb};
+                    DrawTextW(mem, cnt_str.c_str(), static_cast<int>(cnt_str.size()), &cr_cnt,
+                              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                    px += csz.cx + S(10);
+
+                    if (!app->summary_pill_str.empty()) {
+                        SelectObject(mem, app->small_font ? app->small_font : app->font);
+                        SIZE psz{};
+                        GetTextExtentPoint32W(mem, app->summary_pill_str.c_str(),
+                                              static_cast<int>(app->summary_pill_str.size()), &psz);
+                        int pill_h = S(22);
+                        int pill_y = py + (pb - py - pill_h) / 2;
+                        RECT pill_rc{px, pill_y, px + psz.cx + S(16), pill_y + pill_h};
+                        if (pill_rc.right < app->panel_hdr_rc.right - S(190)) {
+                            Gdiplus::Graphics gp_pill(mem);
+                            gp_pill.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                            gp_draw_round_rect(gp_pill, pill_rc, 11, RGB(238, 244, 251), RGB(224, 234, 246), app->dpi, false);
+                            SetTextColor(mem, RGB(71, 85, 105));
+                            DrawTextW(mem, app->summary_pill_str.c_str(),
+                                      static_cast<int>(app->summary_pill_str.size()), &pill_rc,
+                                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                        }
+                    }
+
+                    SelectObject(mem, app->small_font ? app->small_font : app->font);
+                    SetTextColor(mem, RGB(148, 163, 184));
+                    RECT dr{app->panel_hdr_rc.right - S(210), py, app->panel_hdr_rc.right - S(14), pb};
+                    DrawTextW(mem, L"支持拖入目录批量加锁", -1, &dr,
+                              DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
                 }
-            }
-            if (app->status_line_y > 0) {
-                HPEN lpen = CreatePen(PS_SOLID, 1, RGB(216, 222, 228));
-                HPEN old_pen = static_cast<HPEN>(SelectObject(hdc, lpen));
-                int pad = scale_dpi(14, app->dpi);
-                MoveToEx(hdc, pad, app->status_line_y, nullptr);
-                LineTo(hdc, cr.right - pad, app->status_line_y);
-                SelectObject(hdc, old_pen);
-                DeleteObject(lpen);
+
+                // Bottom Status Strip on Mica Canvas
+                if (app->status_strip_rc.right > app->status_strip_rc.left) {
+                    SelectObject(mem, app->small_font ? app->small_font : app->font);
+                    SetTextColor(mem, RGB(100, 116, 139));
+                    int mid_x = (app->status_strip_rc.left + app->status_strip_rc.right) / 2;
+                    RECT sl{app->status_strip_rc.left, app->status_strip_rc.top, mid_x, app->status_strip_rc.bottom};
+                    RECT sr{mid_x, app->status_strip_rc.top, app->status_strip_rc.right, app->status_strip_rc.bottom};
+                    DrawTextW(mem, app->status_left_str.c_str(), static_cast<int>(app->status_left_str.size()), &sl,
+                              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                    DrawTextW(mem, app->status_right_str.c_str(), static_cast<int>(app->status_right_str.size()), &sr,
+                              DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                }
+
+                SelectObject(mem, old_f);
+                BitBlt(hdc, 0, 0, cw, ch, mem, 0, 0, SRCCOPY);
+                SelectObject(mem, old_bmp);
+                DeleteObject(bmp);
+                DeleteDC(mem);
             }
             EndPaint(hwnd, &ps);
             return 0;
@@ -2357,10 +2481,12 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_CTLCOLOREDIT: {
             HDC hdc = reinterpret_cast<HDC>(wp);
             HWND ctl = reinterpret_cast<HWND>(lp);
-            if (ctl == app->search_edit && app->card_brush) {
-                SetBkColor(hdc, RGB(255, 255, 255));
-                SetTextColor(hdc, RGB(31, 35, 40));
-                return reinterpret_cast<LRESULT>(app->card_brush);
+            if (ctl == app->search_edit) {
+                COLORREF bg = app->search_focused ? RGB(255, 255, 255) : RGB(244, 247, 251);
+                HBRUSH br = app->search_focused ? app->card_brush : app->search_brush;
+                SetBkColor(hdc, bg);
+                SetTextColor(hdc, RGB(15, 23, 42));
+                if (br) return reinterpret_cast<LRESULT>(br);
             }
             break;
         }
@@ -2393,7 +2519,8 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 if (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS) {
                     app->search_focused = (HIWORD(wp) == EN_SETFOCUS);
-                    InvalidateRect(hwnd, &app->search_rc, FALSE);
+                    InvalidateRect(hwnd, &app->search_box_rc, FALSE);
+                    InvalidateRect(app->search_edit, nullptr, TRUE);
                     return 0;
                 }
             }
@@ -2406,7 +2533,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 case IDC_BTN_MENU_SETTINGS:
                     show_button_popup_menu(
                         hwnd, GetDlgItem(hwnd, IDC_BTN_MENU_SETTINGS),
-                        {{IDM_TRAY_SETTINGS, L"安全与自动回锁设置..."},
+                        {{IDM_TRAY_SETTINGS, L"安全设置与快捷键..."},
                          {IDM_TRAY_MASTER_PW, L"修改主密码..."},
                          {0, L""},
                          {IDM_TRAY_HEALTH, L"保护区体检与一键修复..."}});
@@ -2620,8 +2747,10 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (app->font) DeleteObject(app->font);
             if (app->bold_font) DeleteObject(app->bold_font);
             if (app->small_font) DeleteObject(app->small_font);
+            if (app->mono_small_font) DeleteObject(app->mono_small_font);
             if (app->bg_brush) DeleteObject(app->bg_brush);
             if (app->card_brush) DeleteObject(app->card_brush);
+            if (app->search_brush) DeleteObject(app->search_brush);
             if (app->folder_lock_icon) DestroyIcon(app->folder_lock_icon);
             if (app->folder_plain_icon) DestroyIcon(app->folder_plain_icon);
             PostQuitMessage(0);
@@ -2791,8 +2920,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     RegisterClassExW(&wc);
 
     int dpi = get_window_dpi(nullptr);
-    int w = scale_dpi(920, dpi);
-    int h = scale_dpi(560, dpi);
+    int w = scale_dpi(940, dpi);
+    int h = scale_dpi(580, dpi);
     int sx = GetSystemMetrics(SM_CXSCREEN);
     int sy = GetSystemMetrics(SM_CYSCREEN);
 
