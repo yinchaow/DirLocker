@@ -32,11 +32,11 @@ echo "=== [2/4] Running Go tests & building Wails Fluent Mica GUIs (Linux + Wind
 docker run --rm \
     -e HOST_UID="$(id -u)" \
     -e HOST_GID="$(id -g)" \
-    -v docpurger-gomod-cache:/root/go/pkg/mod \
+    -v dirlocker-gomod-cache:/root/go/pkg/mod \
     -v "${ROOT_DIR}:/workspace" -w /workspace \
-    docpurger-builder:20.04 bash -lc "
+    dirlocker-builder:20.04 bash -lc "
         set -euo pipefail
-        trap 'chown -R \"\$HOST_UID:\$HOST_GID\" /workspace/build /workspace/build-linux /workspace/build-win64 /workspace/dist /workspace/frontend/dist 2>/dev/null || true' EXIT
+        trap 'chown -R \"\$HOST_UID:\$HOST_GID\" /workspace/build /workspace/build-linux /workspace/build-win64 /workspace/dist /workspace/frontend/dist /workspace/frontend/node_modules /workspace/frontend/wailsjs 2>/dev/null || true' EXIT
 
         echo '--- Go unit tests & vet ---'
         go test -v ./internal/...
@@ -45,7 +45,7 @@ docker run --rm \
         echo '--- Frontend TypeScript + Vite build ---'
         cd /workspace/frontend
         if [ ! -d node_modules ]; then
-            npm ci
+            npm install --no-audit --no-fund
         fi
         npm run build
         cd /workspace

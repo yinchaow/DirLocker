@@ -90,24 +90,7 @@ jobs:
         env:
           BUILDKIT_PROGRESS: plain
         run: |
-          if ! docker build --network=host -f Dockerfile.builder -t dirlocker-builder:20.04 .; then
-            echo "docker build failed; retrying via docker run with explicit DNS..."
-            DNS_ARGS=""
-            for ip in $(python3 -c 'import json; print(" ".join(json.load(open("/etc/docker/daemon.json")).get("dns", ["8.8.8.8"])))'); do
-              DNS_ARGS="${DNS_ARGS} --dns ${ip}"
-            done
-            docker rm -f dirlocker-prep >/dev/null 2>&1 || true
-            docker run --name dirlocker-prep ${DNS_ARGS} \
-              -e DEBIAN_FRONTEND=noninteractive \
-              ubuntu:20.04 \
-              bash -c 'apt-get -o Acquire::ForceIPv4=true update && apt-get -o Acquire::ForceIPv4=true install -y --no-install-recommends build-essential cmake pkg-config qtbase5-dev libqt5x11extras5-dev libx11-dev libxss-dev libpeony-dev mingw-w64 nsis dpkg-dev fakeroot ca-certificates && rm -rf /var/lib/apt/lists/*'
-            docker commit \
-              --change 'ENV DEBIAN_FRONTEND=noninteractive' \
-              --change 'WORKDIR /workspace' \
-              --change 'CMD ["/bin/bash"]' \
-              dirlocker-prep dirlocker-builder:20.04
-            docker rm -f dirlocker-prep
-          fi
+          docker build --network=host -f Dockerfile.builder -t dirlocker-builder:20.04 .
 
       - name: Build Kylin V10 SP1 & Windows x64 installers
         env:
