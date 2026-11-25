@@ -1,0 +1,309 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --fluent-accent: #0067c0;
+    --fluent-accent-hover: #005fb8;
+    --fluent-accent-pressed: #00529e;
+    --mica-base: #eef3fa;
+    --mica-card: rgba(255, 255, 255, 0.72);
+    --mica-card-solid: rgba(255, 255, 255, 0.88);
+    --mica-panel: rgba(255, 255, 255, 0.64);
+    --mica-border: rgba(15, 23, 42, 0.075);
+    --mica-border-highlight: rgba(255, 255, 255, 0.85);
+  }
+
+  .dark {
+    color-scheme: dark;
+    --fluent-accent: #60cdff;
+    --fluent-accent-hover: #4cc2ff;
+    --fluent-accent-pressed: #38b2f0;
+    --mica-base: #181c24;
+    --mica-card: rgba(34, 39, 50, 0.68);
+    --mica-card-solid: rgba(38, 44, 56, 0.86);
+    --mica-panel: rgba(28, 33, 43, 0.62);
+    --mica-border: rgba(255, 255, 255, 0.08);
+    --mica-border-highlight: rgba(255, 255, 255, 0.09);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+    background-color: var(--mica-base);
+    font-family: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', system-ui, sans-serif;
+  }
+}
+
+/* Windows 11 Fluent Mica luminous pearlescent backdrop (100% matched to DocPurger) */
+.mica-backdrop {
+  position: relative;
+  background-color: var(--mica-base);
+  background-image:
+    radial-gradient(62% 58% at 6% 4%, rgba(186, 222, 255, 0.62) 0%, transparent 62%),
+    radial-gradient(54% 52% at 94% 8%, rgba(212, 206, 255, 0.44) 0%, transparent 60%),
+    radial-gradient(56% 52% at 50% 98%, rgba(196, 224, 255, 0.48) 0%, transparent 64%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.35) 0%, rgba(235, 242, 252, 0.25) 100%);
+}
+
+.dark .mica-backdrop {
+  background-image:
+    radial-gradient(58% 54% at 8% 4%, rgba(56, 148, 228, 0.16) 0%, transparent 60%),
+    radial-gradient(50% 48% at 92% 8%, rgba(114, 98, 228, 0.13) 0%, transparent 58%),
+    radial-gradient(55% 48% at 50% 100%, rgba(30, 118, 198, 0.12) 0%, transparent 62%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, rgba(0, 0, 0, 0.18) 100%);
+}
+
+/* Fluent Layered Mica Container Panel */
+.mica-panel {
+  background: var(--mica-panel);
+  backdrop-filter: blur(24px) saturate(145%);
+  -webkit-backdrop-filter: blur(24px) saturate(145%);
+  border: 1px solid var(--mica-border);
+  box-shadow:
+    inset 0 1px 0 var(--mica-border-highlight),
+    0 2px 12px -4px rgba(15, 23, 42, 0.05);
+}
+
+/* Fluent Elevated Card */
+.mica-card {
+  background: var(--mica-card);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid var(--mica-border);
+  box-shadow:
+    inset 0 1px 0 var(--mica-border-highlight),
+    0 2px 8px -2px rgba(15, 23, 42, 0.045);
+}
+
+.dark .mica-panel,
+.dark .mica-card {
+  box-shadow:
+    inset 0 1px 0 var(--mica-border-highlight),
+    0 4px 16px -6px rgba(0, 0, 0, 0.38);
+}
+
+/* Fluent Directory Row Card */
+.fluent-result-card {
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(15, 23, 42, 0.075);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+  transition: background-color 0.16s ease, border-color 0.16s ease, box-shadow 0.18s ease, transform 0.16s ease;
+}
+
+.fluent-result-card:hover {
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(0, 103, 192, 0.24);
+  box-shadow: 0 4px 14px -4px rgba(0, 103, 192, 0.12);
+}
+
+.dark .fluent-result-card {
+  background: rgba(36, 42, 54, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
+}
+
+.dark .fluent-result-card:hover {
+  background: rgba(44, 51, 66, 0.88);
+  border-color: rgba(96, 205, 255, 0.28);
+}
+
+/* Fluent Acrylic Surface (Modals & Status Strips) */
+.acrylic-surface {
+  background: rgba(248, 251, 255, 0.88);
+  backdrop-filter: blur(28px) saturate(165%);
+  -webkit-backdrop-filter: blur(28px) saturate(165%);
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 10px 30px -8px rgba(15, 23, 42, 0.14);
+}
+
+.dark .acrylic-surface {
+  background: rgba(32, 37, 48, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 12px 34px -8px rgba(0, 0, 0, 0.55);
+}
+
+/* Fluent Search / Command Bar */
+.fluent-search-bar {
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 2px 10px -3px rgba(15, 23, 42, 0.06);
+  transition: border-color 0.18s ease, box-shadow 0.2s ease, background-color 0.18s ease;
+}
+
+.fluent-search-bar:focus-within {
+  background: rgba(255, 255, 255, 0.98);
+  border-color: #0067c0;
+  box-shadow:
+    0 0 0 3px rgba(0, 103, 192, 0.14),
+    0 6px 20px -6px rgba(0, 103, 192, 0.16);
+}
+
+.dark .fluent-search-bar {
+  background: rgba(36, 42, 54, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 4px 16px -4px rgba(0, 0, 0, 0.35);
+}
+
+.dark .fluent-search-bar:focus-within {
+  background: rgba(40, 47, 61, 0.94);
+  border-color: #60cdff;
+  box-shadow:
+    0 0 0 3px rgba(96, 205, 255, 0.16),
+    0 8px 24px -6px rgba(0, 0, 0, 0.45);
+}
+
+/* Fluent Primary Accent Button */
+.fluent-btn-primary {
+  background-color: #0067c0;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 1px 2px rgba(0, 62, 120, 0.2);
+  transition: background-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+}
+
+.fluent-btn-primary:hover:not(:disabled) {
+  background-color: #005fb8;
+  box-shadow: 0 3px 10px -2px rgba(0, 103, 192, 0.38);
+}
+
+.fluent-btn-primary:active:not(:disabled) {
+  background-color: #00529e;
+  transform: scale(0.98);
+}
+
+.fluent-btn-primary:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.dark .fluent-btn-primary {
+  background-color: #60cdff;
+  color: #0a1929;
+  border-color: rgba(255, 255, 255, 0.2);
+  font-weight: 600;
+}
+
+.dark .fluent-btn-primary:hover:not(:disabled) {
+  background-color: #7cd6ff;
+}
+
+/* Fluent Standard Subtle Button */
+.fluent-btn-subtle {
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  color: #1e293b;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.fluent-btn-subtle:hover:not(:disabled) {
+  background: #ffffff;
+  border-color: rgba(0, 103, 192, 0.35);
+  color: #0067c0;
+}
+
+.dark .fluent-btn-subtle {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #e2e8f0;
+}
+
+.dark .fluent-btn-subtle:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.11);
+  border-color: rgba(96, 205, 255, 0.35);
+  color: #60cdff;
+}
+
+/* Fluent Text Input */
+.fluent-input {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-bottom-color: rgba(15, 23, 42, 0.24);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease;
+}
+
+.fluent-input:focus {
+  outline: none;
+  background: #ffffff;
+  border-color: #0067c0;
+  box-shadow: 0 0 0 3px rgba(0, 103, 192, 0.14);
+}
+
+.dark .fluent-input {
+  background: rgba(20, 24, 32, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom-color: rgba(255, 255, 255, 0.22);
+  color: #f1f5f9;
+}
+
+.dark .fluent-input:focus {
+  background: rgba(24, 29, 40, 0.95);
+  border-color: #60cdff;
+  box-shadow: 0 0 0 3px rgba(96, 205, 255, 0.16);
+}
+
+/* Wails frameless titlebar drag regions */
+.wails-drag {
+  --wails-draggable: drag;
+  user-select: none;
+}
+
+.wails-no-drag {
+  --wails-draggable: no-drag;
+}
+
+/* Wails native directory drag-and-drop target */
+.dir-drop-zone {
+  --wails-drop-target: drop;
+}
+
+.dir-drop-zone.wails-drop-target-active {
+  border-color: var(--fluent-accent);
+  box-shadow:
+    inset 0 1px 0 var(--mica-border-highlight),
+    0 0 0 3px rgba(0, 103, 192, 0.18);
+}
+
+.dark .dir-drop-zone.wails-drop-target-active {
+  box-shadow:
+    inset 0 1px 0 var(--mica-border-highlight),
+    0 0 0 3px rgba(96, 205, 255, 0.22);
+}
+
+/* Clean Fluent scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.28) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(100, 116, 139, 0.26);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(100, 116, 139, 0.48);
+}

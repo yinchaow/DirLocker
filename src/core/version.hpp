@@ -1,7 +1,7 @@
 #pragma once
 
 #ifndef DIRLOCKER_VERSION_STR
-#define DIRLOCKER_VERSION_STR "2.3.0"
+#define DIRLOCKER_VERSION_STR "3.0.0"
 #endif
 
 #define DIRLOCKER_WIDEN_IMPL(x) L##x

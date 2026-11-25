@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "DirLocker",
+  "outputfilename": "dirlocker",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "yinchaow & Gemini"
+  },
+  "info": {
+    "companyName": "yinchaow",
+    "productName": "目录密匣 (DirLocker)",
+    "productVersion": "3.0.0",
+    "copyright": "Copyright © 2026 yinchaow & Gemini",
+    "comments": "跨平台轻量级目录密码保护工具（Windows / 银河麒麟 V10 SP1）"
+  }
+}

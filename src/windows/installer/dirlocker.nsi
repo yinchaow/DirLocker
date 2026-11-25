@@ -4,10 +4,10 @@ Unicode True
 !include "LogicLib.nsh"
 
 !ifndef APP_VERSION
-  !define APP_VERSION "2.3.0"
+  !define APP_VERSION "3.0.0"
 !endif
 !ifndef OUT_FILE
-  !define OUT_FILE "DirLocker_Setup_v2.3.0.exe"
+  !define OUT_FILE "DirLocker_Setup_v3.0.0.exe"
 !endif
 !ifndef SRC_WIN_DIR
   !define SRC_WIN_DIR ".."
@@ -116,6 +116,8 @@ Section "主程序与加密目录关联 (必需)" SecCore
 
   SetOutPath "$INSTDIR"
   File "${BIN_DIR}\dirlocker.exe"
+  File "${SRC_WIN_DIR}\app.ico"
+  File "${SRC_WIN_DIR}\folder_lock.ico"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   ExecWait '"$INSTDIR\dirlocker.exe" --register-no-autostart'
@@ -187,6 +189,8 @@ Section "Uninstall"
   RMDir "$SMPROGRAMS\目录密匣"
 
   Delete "$INSTDIR\dirlocker.exe"
+  Delete "$INSTDIR\app.ico"
+  Delete "$INSTDIR\folder_lock.ico"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
 
