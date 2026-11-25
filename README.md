@@ -3,7 +3,8 @@
 轻量级跨平台目录密码保护工具，支持 **Windows 10 / 11 (x64)** 与 **银河麒麟 V10 SP1（Ubuntu 20.04 x64）**。  
 采用**零文件内容改动**机制，保护目录隐私与防止误删，绝不加密、改写或破坏目录内原始文件。
 
-- **当前版本**：`v2.3.0`
+- **当前版本**：`v3.0.0`
+- **界面架构**：`Wails v2 (Go + React + Tailwind CSS)` · Windows 11 Fluent Mica 风格（支持浅色云母 / 深海云母暗色切换）
 - **开发人员**：`yinchaow & Gemini`
 - **开源仓库**：<https://github.com/yinchaow/DirLocker>
 - **开源协议**：[MIT License](LICENSE)
@@ -11,6 +12,8 @@
 ---
 
 ## 核心特性
+
+- **Fluent Mica 现代界面与统一视觉体系**：基于 Wails v2 + React 18 + Tailwind CSS 构建无边框 Fluent Design 2 窗口（Win11 原生 DWM 圆角 + 浅色/深海云母双主题），软件图标与双端上锁目录图标保持高度一致。
 
 - **双重密码与防爆破冷却**：支持统一主密码与单目录独立密码，随时自由切换、修改；连续输错密码达 5 次触发递增退避冷却（30s / 60s / 300s），严格仅限时长等待、绝不删除用户数据。
 - **主界面可选验证锁**：可在「安全设置」中开启“打开主窗口需验证主密码”（最小化或关闭至托盘后自动重锁）；开启后日常双击 `.dlock` / `.desktop` 解锁目录仍直接弹窗，不阻断快捷流程。
@@ -26,7 +29,7 @@
 ## 下载与安装
 
 ### Windows 10 / 11 (x64)
-运行安装程序 `DirLocker_Setup_v2.3.0.exe` 按向导安装（默认安装至 `C:\Program Files\DirLocker`，支持右键菜单、开机托盘自启与系统标准卸载）。
+运行安装程序 `DirLocker_Setup_v3.0.0.exe` 按向导安装（默认安装至 `C:\Program Files\DirLocker`，支持右键菜单、开机托盘自启与系统标准卸载；纯 Go 零 CGO 编译）。
 
 > [!IMPORTANT]
 > **关于 Windows 11 “智能应用控制 (Smart App Control / SAC)” 的说明**：
@@ -35,17 +38,17 @@
 
 ### 银河麒麟 V10 SP1 / Ubuntu 20.04 (x64)
 ```bash
-sudo dpkg -i dirlocker_2.3.0_amd64.deb
-# 若提示缺少依赖，执行：
+sudo dpkg -i dirlocker_3.0.0_amd64.deb
+# 若提示缺少依赖（如 libwebkit2gtk-4.0-37），执行：
 sudo apt-get install -f
 ```
-或解压离线安装包后执行 `sudo ./install.sh`（安装/升级过程会自动退出正在运行的旧版桌面程序并更新守护服务）。
+或解压离线安装包后执行 `sudo ./install.sh`（安装/升级过程会自动退出正在运行的旧版桌面程序并更新 `dirlockerd` 守护服务与 Peony 右键插件）。
 
 ---
 
 ## 从源码编译
 
-在安装了 Docker 的 Linux 环境中执行（自动构建 `ubuntu:20.04` 交叉编译环境，包含 glibc 2.31 与 MinGW-w64）：
+在安装了 Docker 的 Linux 环境中执行（使用 `Ubuntu 20.04 / glibc 2.31` 交叉编译环境，自动完成 C++ `dirlockerd` / Peony 插件、Go 后端测试、React 前端构建及 Wails 双平台打包）：
 
 ```bash
 ./scripts/build_all.sh
