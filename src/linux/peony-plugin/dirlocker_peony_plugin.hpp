@@ -7,7 +7,7 @@ namespace dirlocker {
 
 class DirLockerPeonyPlugin : public QObject, public Peony::MenuPluginInterface {
     Q_OBJECT
-    Q_PLUGIN_METADATA(IID MenuPluginInterface_iid)
+    Q_PLUGIN_METADATA(IID MenuPluginInterface_iid FILE "common.json")
     Q_INTERFACES(Peony::MenuPluginInterface)
 public:
     explicit DirLockerPeonyPlugin(QObject* parent = nullptr);

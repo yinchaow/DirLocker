@@ -84,6 +84,10 @@ if [ -d /usr/lib/x86_64-linux-gnu/peony-qt-extensions ] && [ -f /usr/lib/peony-q
     ln -sf /usr/lib/peony-qt-extensions/libdirlocker-peony-plugin.so \
            /usr/lib/x86_64-linux-gnu/peony-qt-extensions/libdirlocker-peony-plugin.so
 fi
+if [ -d /usr/lib/x86_64-linux-gnu/peony-extensions ] && [ -f /usr/lib/peony-qt-extensions/libdirlocker-peony-plugin.so ]; then
+    ln -sf /usr/lib/peony-qt-extensions/libdirlocker-peony-plugin.so \
+           /usr/lib/x86_64-linux-gnu/peony-extensions/libdirlocker-peony-plugin.so
+fi
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
     systemctl enable dirlockerd.service || true
@@ -153,7 +157,8 @@ EOF
 cat > "${PKG_ROOT}/DEBIAN/postrm" <<'EOF'
 #!/bin/sh
 set -e
-rm -f /usr/lib/x86_64-linux-gnu/peony-qt-extensions/libdirlocker-peony-plugin.so
+rm -f /usr/lib/x86_64-linux-gnu/peony-qt-extensions/libdirlocker-peony-plugin.so \
+      /usr/lib/x86_64-linux-gnu/peony-extensions/libdirlocker-peony-plugin.so
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
 fi
