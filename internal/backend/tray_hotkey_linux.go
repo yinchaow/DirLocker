@@ -10,6 +10,12 @@ package backend
 #include <stdlib.h>
 #include <string.h>
 
+// Initialize Xlib thread safety before GTK/GDK initializes X11.
+__attribute__((constructor))
+static void dl_init_x11_threads(void) {
+    XInitThreads();
+}
+
 static int dl_grab_error = 0;
 static int dl_x_err_handler(Display* dpy, XErrorEvent* ev) {
     (void)dpy;
@@ -20,6 +26,7 @@ static int dl_x_err_handler(Display* dpy, XErrorEvent* ev) {
 }
 
 static int dl_grab_combo(Display* dpy, KeyCode code, unsigned int base_mods) {
+    if (!dpy || code == 0) return 0;
     Window root = DefaultRootWindow(dpy);
     unsigned int masks[4] = {0, LockMask, Mod2Mask, LockMask | Mod2Mask};
     dl_grab_error = 0;
@@ -75,11 +82,12 @@ typedef struct {
 typedef DL_XScreenSaverInfo* (*fn_xss_alloc)(void);
 typedef Status (*fn_xss_query)(Display*, Drawable, DL_XScreenSaverInfo*);
 
-static int dl_xss_idle_ms(unsigned long* out_ms) {
+static int dl_xss_idle_ms_on_display(Display* dpy, unsigned long* out_ms) {
     static void* handle = NULL;
     static fn_xss_alloc p_alloc = NULL;
     static fn_xss_query p_query = NULL;
     static int inited = 0;
+    if (!dpy) return 0;
     if (!inited) {
         inited = 1;
         handle = dlopen("libXss.so.1", RTLD_LAZY);
@@ -89,20 +97,14 @@ static int dl_xss_idle_ms(unsigned long* out_ms) {
         }
     }
     if (!p_alloc || !p_query) return 0;
-    Display* dpy = XOpenDisplay(NULL);
-    if (!dpy) return 0;
     DL_XScreenSaverInfo* info = p_alloc();
-    if (!info) {
-        XCloseDisplay(dpy);
-        return 0;
-    }
+    if (!info) return 0;
     int ok = 0;
     if (p_query(dpy, DefaultRootWindow(dpy), info) != 0) {
         *out_ms = info->idle;
         ok = 1;
     }
     XFree(info);
-    XCloseDisplay(dpy);
     return ok;
 }
 */
@@ -112,6 +114,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -123,25 +126,43 @@ import (
 	"github.com/godbus/dbus/v5/prop"
 )
 
+type x11OpKind int
+
+const (
+	x11OpRegister x11OpKind = iota
+	x11OpTest
+	x11OpIdle
+)
+
+type x11Op struct {
+	kind x11OpKind
+	spec core.HotkeySpec
+	done chan x11Res
+}
+
+type x11Res struct {
+	ok   bool
+	msg  string
+	idle int
+}
+
 type linuxPlatformHooks struct {
-	mu           sync.Mutex
-	onShow       func()
-	onLockAll    func()
-	onQuit       func()
-	stopCh       chan struct{}
-	stopOnce     sync.Once
-	dpy          *C.Display
-	grabbedCode  C.KeyCode
-	grabbedMods  C.uint
-	activeSpec   core.HotkeySpec
-	hotkeyActive bool
-	dbusConn     *dbus.Conn
-	trayActive   bool
+	mu         sync.Mutex
+	onShow     func()
+	onLockAll  func()
+	onQuit     func()
+	stopCh     chan struct{}
+	stopOnce   sync.Once
+	x11ReqCh   chan x11Op
+	x11Ready   bool
+	dbusConn   *dbus.Conn
+	trayActive bool
 }
 
 func NewPlatformHooks() PlatformHooks {
 	return &linuxPlatformHooks{
-		stopCh: make(chan struct{}),
+		stopCh:   make(chan struct{}),
+		x11ReqCh: make(chan x11Op, 8),
 	}
 }
 
@@ -181,48 +202,150 @@ func (h *linuxPlatformHooks) Start(onShow func(), onLockAll func(), onQuit func(
 	h.onShow = onShow
 	h.onLockAll = onLockAll
 	h.onQuit = onQuit
-	if os.Getenv("DISPLAY") != "" {
-		h.dpy = C.XOpenDisplay(nil)
-	}
 	h.mu.Unlock()
 
-	if h.dpy != nil {
-		go h.runX11Loop()
+	if os.Getenv("DISPLAY") != "" {
+		readyCh := make(chan bool, 1)
+		go h.runX11Worker(readyCh)
+		ok := <-readyCh
+		h.mu.Lock()
+		h.x11Ready = ok
+		h.mu.Unlock()
 	}
 	go h.startSNITray()
 }
 
-func (h *linuxPlatformHooks) runX11Loop() {
+// runX11Worker owns a dedicated X11 Display* on a single locked OS thread so
+// Xlib is never called concurrently across threads.
+func (h *linuxPlatformHooks) runX11Worker(readyCh chan<- bool) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer func() { _ = recover() }()
+
+	dpy := C.XOpenDisplay(nil)
+	if dpy == nil {
+		readyCh <- false
+		return
+	}
+	defer C.XCloseDisplay(dpy)
+	readyCh <- true
+
+	var grabbedCode C.KeyCode
+	var grabbedMods C.uint
+	var activeSpec core.HotkeySpec
+	hotkeyActive := false
+
 	ticker := time.NewTicker(40 * time.Millisecond)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-h.stopCh:
-			return
-		case <-ticker.C:
-			h.mu.Lock()
-			dpy := h.dpy
-			active := h.hotkeyActive
-			wantCode := h.grabbedCode
-			wantMods := h.grabbedMods
-			onLockAll := h.onLockAll
-			if dpy == nil {
-				h.mu.Unlock()
-				return
+			if hotkeyActive {
+				C.dl_ungrab_combo(dpy, grabbedCode, grabbedMods)
 			}
+			return
+
+		case req := <-h.x11ReqCh:
+			switch req.kind {
+			case x11OpRegister:
+				if hotkeyActive {
+					C.dl_ungrab_combo(dpy, grabbedCode, grabbedMods)
+					hotkeyActive = false
+				}
+				code, mods, ok := hotkeySpecToX11(dpy, req.spec)
+				if !ok {
+					req.done <- x11Res{ok: false, msg: "无法映射快捷键按键: " + req.spec.String()}
+					continue
+				}
+				if C.dl_grab_combo(dpy, code, mods) == 0 {
+					req.done <- x11Res{
+						ok:  false,
+						msg: fmt.Sprintf("全局快捷键 %s 注册失败，可能已被桌面环境或其他程序占用", req.spec.String()),
+					}
+					continue
+				}
+				grabbedCode = code
+				grabbedMods = mods
+				activeSpec = req.spec
+				hotkeyActive = true
+				req.done <- x11Res{ok: true}
+
+			case x11OpTest:
+				if hotkeyActive && activeSpec.String() == req.spec.String() {
+					req.done <- x11Res{ok: true, msg: "当前快捷键已生效，无冲突"}
+					continue
+				}
+				code, mods, ok := hotkeySpecToX11(dpy, req.spec)
+				if !ok {
+					req.done <- x11Res{ok: false, msg: "不支持该按键组合"}
+					continue
+				}
+				if C.dl_grab_combo(dpy, code, mods) == 0 {
+					req.done <- x11Res{
+						ok:  false,
+						msg: fmt.Sprintf("快捷键 %s 已被系统或其他程序占用，请更换组合", req.spec.String()),
+					}
+					continue
+				}
+				C.dl_ungrab_combo(dpy, code, mods)
+				req.done <- x11Res{
+					ok:  true,
+					msg: fmt.Sprintf("快捷键 %s 可用，未发现系统冲突", req.spec.String()),
+				}
+
+			case x11OpIdle:
+				var ms C.ulong
+				if C.dl_xss_idle_ms_on_display(dpy, &ms) != 0 {
+					req.done <- x11Res{ok: true, idle: int(ms / 1000)}
+				} else {
+					req.done <- x11Res{ok: false}
+				}
+			}
+
+		case <-ticker.C:
 			var gotCode C.KeyCode
 			var gotState C.uint
 			fired := false
 			for C.dl_poll_keypress(dpy, &gotCode, &gotState) != 0 {
-				if active && gotCode == wantCode && gotState == wantMods {
+				if hotkeyActive && gotCode == grabbedCode && gotState == grabbedMods {
 					fired = true
 				}
 			}
-			h.mu.Unlock()
-			if fired && onLockAll != nil {
-				go onLockAll()
+			if fired {
+				h.mu.Lock()
+				cb := h.onLockAll
+				h.mu.Unlock()
+				if cb != nil {
+					go cb()
+				}
 			}
 		}
+	}
+}
+
+func (h *linuxPlatformHooks) sendX11Op(op x11Op) (x11Res, bool) {
+	h.mu.Lock()
+	ready := h.x11Ready
+	h.mu.Unlock()
+	if !ready {
+		return x11Res{}, false
+	}
+	op.done = make(chan x11Res, 1)
+	select {
+	case h.x11ReqCh <- op:
+	case <-h.stopCh:
+		return x11Res{}, false
+	case <-time.After(2 * time.Second):
+		return x11Res{}, false
+	}
+	select {
+	case res := <-op.done:
+		return res, true
+	case <-h.stopCh:
+		return x11Res{}, false
+	case <-time.After(2 * time.Second):
+		return x11Res{}, false
 	}
 }
 
@@ -230,19 +353,12 @@ func (h *linuxPlatformHooks) Stop() {
 	h.stopOnce.Do(func() {
 		close(h.stopCh)
 		h.mu.Lock()
-		if h.dpy != nil {
-			if h.hotkeyActive {
-				C.dl_ungrab_combo(h.dpy, h.grabbedCode, h.grabbedMods)
-				h.hotkeyActive = false
-			}
-			C.XCloseDisplay(h.dpy)
-			h.dpy = nil
-		}
 		if h.dbusConn != nil {
 			_ = h.dbusConn.Close()
 			h.dbusConn = nil
 		}
 		h.trayActive = false
+		h.x11Ready = false
 		h.mu.Unlock()
 	})
 }
@@ -252,27 +368,11 @@ func (h *linuxPlatformHooks) RegisterHotkey(hotkey string) (bool, string) {
 	if err != nil {
 		return false, err.Error()
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.dpy == nil {
+	res, ok := h.sendX11Op(x11Op{kind: x11OpRegister, spec: spec})
+	if !ok {
 		return false, "当前桌面会话未提供 X11 显示连接，全局快捷键暂不可用"
 	}
-	if h.hotkeyActive {
-		C.dl_ungrab_combo(h.dpy, h.grabbedCode, h.grabbedMods)
-		h.hotkeyActive = false
-	}
-	code, mods, ok := hotkeySpecToX11(h.dpy, spec)
-	if !ok {
-		return false, "无法映射快捷键按键: " + spec.String()
-	}
-	if C.dl_grab_combo(h.dpy, code, mods) == 0 {
-		return false, fmt.Sprintf("全局快捷键 %s 注册失败，可能已被桌面环境或其他程序占用", spec.String())
-	}
-	h.grabbedCode = code
-	h.grabbedMods = mods
-	h.activeSpec = spec
-	h.hotkeyActive = true
-	return true, ""
+	return res.ok, res.msg
 }
 
 func (h *linuxPlatformHooks) TestHotkey(hotkey string) (bool, string) {
@@ -280,30 +380,17 @@ func (h *linuxPlatformHooks) TestHotkey(hotkey string) (bool, string) {
 	if err != nil {
 		return false, err.Error()
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.dpy == nil {
+	res, ok := h.sendX11Op(x11Op{kind: x11OpTest, spec: spec})
+	if !ok {
 		return false, "当前会话未检测到 X11 显示连接"
 	}
-	if h.hotkeyActive && h.activeSpec.String() == spec.String() {
-		return true, "当前快捷键已生效，无冲突"
-	}
-	code, mods, ok := hotkeySpecToX11(h.dpy, spec)
-	if !ok {
-		return false, "不支持该按键组合"
-	}
-	if C.dl_grab_combo(h.dpy, code, mods) == 0 {
-		return false, fmt.Sprintf("快捷键 %s 已被系统或其他程序占用，请更换组合", spec.String())
-	}
-	C.dl_ungrab_combo(h.dpy, code, mods)
-	return true, fmt.Sprintf("快捷键 %s 可用，未发现系统冲突", spec.String())
+	return res.ok, res.msg
 }
 
 func (h *linuxPlatformHooks) IdleSeconds() (int, bool) {
-	// 1. Try XScreenSaver extension (works natively on Kylin UKUI / Xorg)
-	var ms C.ulong
-	if C.dl_xss_idle_ms(&ms) != 0 {
-		return int(ms / 1000), true
+	// 1. Try XScreenSaver extension via dedicated X11 worker (works natively on Kylin UKUI / Xorg)
+	if res, ok := h.sendX11Op(x11Op{kind: x11OpIdle}); ok && res.ok {
+		return res.idle, true
 	}
 	// 2. Fallback to D-Bus ScreenSaver / Mutter IdleMonitor
 	conn, err := dbus.SessionBus()
@@ -336,6 +423,21 @@ func (h *linuxPlatformHooks) OpenURL(u string) error {
 }
 
 // --- Native D-Bus StatusNotifierItem + DBusMenu (Kylin UKUI / KDE / AppIndicator tray) ---
+
+// sniPixmap matches the StatusNotifierItem D-Bus spec signature (iiay).
+type sniPixmap struct {
+	Width  int32
+	Height int32
+	Data   []byte
+}
+
+// sniToolTip matches the StatusNotifierItem D-Bus spec signature (sa(iiay)ss).
+type sniToolTip struct {
+	IconName    string
+	IconPixmap  []sniPixmap
+	Title       string
+	Description string
+}
 
 type sniItem struct {
 	hooks *linuxPlatformHooks
@@ -412,7 +514,10 @@ func (m *sniMenu) GetGroupProperties(ids []int32, propertyNames []string) ([]str
 	ID    int32
 	Props map[string]dbus.Variant
 }, *dbus.Error) {
-	return nil, nil
+	return []struct {
+		ID    int32
+		Props map[string]dbus.Variant
+	}{}, nil
 }
 
 func (m *sniMenu) GetProperty(id int32, name string) (dbus.Variant, *dbus.Error) {
@@ -460,43 +565,39 @@ func (m *sniMenu) AboutToShowGroup(ids []int32) ([]int32, []int32, *dbus.Error) 
 	return []int32{}, []int32{}, nil
 }
 
-func (h *linuxPlatformHooks) startSNITray() {
-	conn, err := dbus.ConnectSessionBus()
-	if err != nil {
-		return
-	}
-	busName := fmt.Sprintf("org.kde.StatusNotifierItem-%d-1", os.Getpid())
-	reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)
-	if err != nil || reply != dbus.RequestNameReplyPrimaryOwner {
-		_ = conn.Close()
-		return
-	}
-
+func (h *linuxPlatformHooks) exportSNIObjects(conn *dbus.Conn) error {
 	itemPath := dbus.ObjectPath("/StatusNotifierItem")
 	menuPath := dbus.ObjectPath("/MenuBar")
 
 	item := &sniItem{hooks: h}
 	menu := &sniMenu{hooks: h}
-	_ = conn.Export(item, itemPath, "org.kde.StatusNotifierItem")
-	_ = conn.Export(menu, menuPath, "com.canonical.dbusmenu")
+	if err := conn.Export(item, itemPath, "org.kde.StatusNotifierItem"); err != nil {
+		return err
+	}
+	if err := conn.Export(menu, menuPath, "com.canonical.dbusmenu"); err != nil {
+		return err
+	}
 
 	itemProps := map[string]map[string]*prop.Prop{
 		"org.kde.StatusNotifierItem": {
-			"Category":   {Value: "ApplicationStatus", Writable: false},
-			"Id":         {Value: "dirlocker", Writable: false},
-			"Title":      {Value: "目录密匣", Writable: false},
-			"Status":     {Value: "Active", Writable: false},
-			"IconName":   {Value: "dirlocker", Writable: false},
-			"ItemIsMenu": {Value: false, Writable: false},
-			"Menu":       {Value: menuPath, Writable: false},
+			"Category":            {Value: "ApplicationStatus", Writable: false},
+			"Id":                  {Value: "dirlocker", Writable: false},
+			"Title":               {Value: "目录密匣", Writable: false},
+			"Status":              {Value: "Active", Writable: false},
+			"WindowId":            {Value: int32(0), Writable: false},
+			"IconName":            {Value: "dirlocker", Writable: false},
+			"IconThemePath":       {Value: "/usr/share/icons/hicolor", Writable: false},
+			"IconPixmap":          {Value: []sniPixmap{}, Writable: false},
+			"OverlayIconName":     {Value: "", Writable: false},
+			"OverlayIconPixmap":   {Value: []sniPixmap{}, Writable: false},
+			"AttentionIconName":   {Value: "", Writable: false},
+			"AttentionIconPixmap": {Value: []sniPixmap{}, Writable: false},
+			"ItemIsMenu":          {Value: false, Writable: false},
+			"Menu":                {Value: menuPath, Writable: false},
 			"ToolTip": {
-				Value: struct {
-					IconName    string
-					IconPixmap  []struct{}
-					Title       string
-					Description string
-				}{
+				Value: sniToolTip{
 					IconName:    "dirlocker",
+					IconPixmap:  []sniPixmap{},
 					Title:       "目录密匣 (DirLocker)",
 					Description: "跨平台轻量级目录密码保护工具",
 				},
@@ -504,7 +605,9 @@ func (h *linuxPlatformHooks) startSNITray() {
 			},
 		},
 	}
-	_, _ = prop.Export(conn, itemPath, itemProps)
+	if _, err := prop.Export(conn, itemPath, itemProps); err != nil {
+		return err
+	}
 
 	menuProps := map[string]map[string]*prop.Prop{
 		"com.canonical.dbusmenu": {
@@ -513,7 +616,9 @@ func (h *linuxPlatformHooks) startSNITray() {
 			"Status":        {Value: "normal", Writable: false},
 		},
 	}
-	_, _ = prop.Export(conn, menuPath, menuProps)
+	if _, err := prop.Export(conn, menuPath, menuProps); err != nil {
+		return err
+	}
 
 	_ = conn.Export(introspect.NewIntrospectable(&introspect.Node{
 		Name: string(itemPath),
@@ -532,6 +637,28 @@ func (h *linuxPlatformHooks) startSNITray() {
 			{Name: "com.canonical.dbusmenu", Methods: introspect.Methods(menu)},
 		},
 	}), menuPath, "org.freedesktop.DBus.Introspectable")
+
+	return nil
+}
+
+func (h *linuxPlatformHooks) startSNITray() {
+	defer func() { _ = recover() }()
+
+	conn, err := dbus.ConnectSessionBus()
+	if err != nil {
+		return
+	}
+	busName := fmt.Sprintf("org.kde.StatusNotifierItem-%d-1", os.Getpid())
+	reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)
+	if err != nil || reply != dbus.RequestNameReplyPrimaryOwner {
+		_ = conn.Close()
+		return
+	}
+
+	if err := h.exportSNIObjects(conn); err != nil {
+		_ = conn.Close()
+		return
+	}
 
 	watcher := conn.Object("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher")
 	if call := watcher.Call("org.kde.StatusNotifierWatcher.RegisterStatusNotifierItem", 0, busName); call.Err != nil {

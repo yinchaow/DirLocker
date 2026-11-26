@@ -1,7 +1,7 @@
 package core
 
 const (
-	AppVersion        = "3.0.0"
+	AppVersion        = "3.0.1"
 	AppNameZH         = "目录密匣"
 	AppNameEN         = "DirLocker"
 	DefaultHotkey     = "Ctrl+Alt+K"

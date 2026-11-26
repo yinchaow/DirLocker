@@ -3,7 +3,7 @@
 轻量级跨平台目录密码保护工具，支持 **Windows 10 / 11 (x64)** 与 **银河麒麟 V10 SP1（Ubuntu 20.04 x64）**。  
 采用**零文件内容改动**机制，保护目录隐私与防止误删，绝不加密、改写或破坏目录内原始文件。
 
-- **当前版本**：`v3.0.0`
+- **当前版本**：`v3.0.1`
 - **界面架构**：`Wails v2 (Go + React + Tailwind CSS)` · Windows 11 Fluent Mica 风格（支持浅色云母 / 深海云母暗色切换）
 - **开发人员**：`yinchaow & Gemini`
 - **开源仓库**：<https://github.com/yinchaow/DirLocker>
@@ -29,7 +29,7 @@
 ## 下载与安装
 
 ### Windows 10 / 11 (x64)
-运行安装程序 `DirLocker_Setup_v3.0.0.exe` 按向导安装（默认安装至 `C:\Program Files\DirLocker`，支持右键菜单、开机托盘自启与系统标准卸载；纯 Go 零 CGO 编译）。
+运行安装程序 `DirLocker_Setup_v3.0.1.exe` 按向导安装（默认安装至 `C:\Program Files\DirLocker`，支持右键菜单、开机托盘自启与系统标准卸载；纯 Go 零 CGO 编译）。
 
 > [!IMPORTANT]
 > **关于 Windows 11 “智能应用控制 (Smart App Control / SAC)” 的说明**：
@@ -38,7 +38,7 @@
 
 ### 银河麒麟 V10 SP1 / Ubuntu 20.04 (x64)
 ```bash
-sudo dpkg -i dirlocker_3.0.0_amd64.deb
+sudo dpkg -i dirlocker_3.0.1_amd64.deb
 # 若提示缺少依赖（如 libwebkit2gtk-4.0-37），执行：
 sudo apt-get install -f
 ```

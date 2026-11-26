@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_VERSION="3.0.0"
+APP_VERSION="3.0.1"
 
 echo "================================================================"
 echo "  目录密匣 (DirLocker) v${APP_VERSION} — Wails Fluent Mica 双平台构建"

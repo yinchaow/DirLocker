@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"dirlocker/internal/backend"
@@ -27,6 +29,7 @@ type App struct {
 	hotkeyWarning string
 	forceQuit     bool
 	stopBg        chan struct{}
+	hooksOnce     sync.Once
 	pendingAction *core.ActionRequestEvent
 }
 
@@ -40,37 +43,61 @@ func NewApp(eng backend.Engine, hooks backend.PlatformHooks, args []string, star
 	}
 }
 
+func (a *App) initPlatformHooksOnce() {
+	a.hooksOnce.Do(func() {
+		a.hooks.Start(
+			func() { a.showMainWindow() },
+			func() { a.triggerHotkeyLockAll() },
+			func() { a.requestQuitFromTray() },
+		)
+
+		// Register configured global hotkey
+		if st, err := a.engine.Status(); err == nil && st.DaemonConnected {
+			hk := st.Settings.Hotkey
+			if hk == "" {
+				hk = core.DefaultHotkey
+			}
+			ok, warn := a.hooks.RegisterHotkey(hk)
+			a.mu.Lock()
+			a.hotkeyActive = ok
+			a.hotkeyWarning = warn
+			a.mu.Unlock()
+		}
+
+		go a.runBackgroundLoops()
+	})
+}
+
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.engine.EnsureShellIntegration()
 
-	a.hooks.Start(
-		func() { a.showMainWindow() },
-		func() { a.triggerHotkeyLockAll() },
-		func() { a.requestQuitFromTray() },
-	)
-
-	// Register configured global hotkey
-	if st, err := a.engine.Status(); err == nil && st.DaemonConnected {
-		hk := st.Settings.Hotkey
-		if hk == "" {
-			hk = core.DefaultHotkey
+	// Allow SIGTERM/SIGINT (e.g. dpkg preinst pkill or Ctrl+C) to exit cleanly instead of hiding to tray.
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		select {
+		case <-sigCh:
+			a.ForceQuit(false)
+		case <-a.stopBg:
 		}
-		ok, warn := a.hooks.RegisterHotkey(hk)
-		a.mu.Lock()
-		a.hotkeyActive = ok
-		a.hotkeyWarning = warn
-		a.mu.Unlock()
-	}
+		signal.Stop(sigCh)
+	}()
 
 	// Queue any initial CLI action (--unlock-file, --unlock-id, --toggle, --lock, --unlock, --post-install)
 	a.parseInitialAction(a.launchArgs)
 
-	go a.runBackgroundLoops()
+	// Delay hook startup slightly so Wails SetupSingleInstance on Linux can exit cleanly
+	// in secondary instances before touching X11 hotkey grabs or D-Bus tray registration.
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		a.initPlatformHooksOnce()
+	}()
 }
 
 func (a *App) domReady(ctx context.Context) {
 	a.ctx = ctx
+	a.initPlatformHooksOnce()
 	a.hooks.ApplyWindowRoundedCorners()
 
 	a.mu.Lock()
@@ -279,6 +306,12 @@ func (a *App) onSecondInstanceLaunch(data options.SecondInstanceData) {
 	}
 
 	act := a.buildActionFromArgs(args)
+	if a.startMode == "post-install" && (act == nil || act.Type != "post-install") {
+		a.CompletePostInstall(true)
+		if a.ctx != nil {
+			wailsRuntime.EventsEmit(a.ctx, "dirlocker:exit-post-install", true)
+		}
+	}
 	a.showMainWindow()
 	if act != nil && a.ctx != nil {
 		wailsRuntime.EventsEmit(a.ctx, "dirlocker:action", act)

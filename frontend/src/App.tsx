@@ -183,6 +183,10 @@ export default function App() {
     const offToast = backend.onEvent<{ message: string; tone?: NotifyTone }>('dirlocker:toast', (t) => {
       if (t?.message) notify(t.message, t.tone || 'info');
     });
+    const offExitPostInstall = backend.onEvent<boolean>('dirlocker:exit-post-install', () => {
+      setPostInstallMode(false);
+      refreshStatus(true);
+    });
     const offHidden = backend.onEvent<boolean>('dirlocker:hidden-to-tray', () => {
       setStatus((cur) => {
         if (cur.has_master_password && cur.settings.require_master_on_open) {
@@ -248,6 +252,7 @@ export default function App() {
     return () => {
       offState();
       offToast();
+      offExitPostInstall();
       offHidden();
       offAction();
     };
